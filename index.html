@@ -331,7 +331,7 @@ const M = {
   accel:0,        /* smoothed m/s² */
   throttle:0, rpm:0, gear:0, shiftT:0, shiftDir:0,
   t:performance.now(), gpsT:0, gpsOk:false, lastPos:null, auto:false, autoT:0, fixA:0, fixV:0,
-  armed:true, launchT:0, saveT:0, rev:0, freeRpm:0, offline:false,
+  armed:true, launchT:0, saveT:0, rev:0, freeRpm:0, offline:false, gpsLost:false,
 };
 
 function stepModel(now) {
@@ -348,7 +348,8 @@ function stepModel(now) {
   }
   if (S.src === 'gps' && M.gpsOk) { const since = now - M.gpsT;
     if (since < 1800) M.target = Math.max(0, M.target + M.fixA * dt);       /* between fixes: carry the trend on */
-    else if (since > 6000) M.target *= Math.pow(0.5, dt); }                 /* fix lost: coast down */
+    else if (since > 6000) M.target *= Math.pow(0.5, dt);                   /* fix lost: coast down */
+    if (since > 4000 && !M.gpsLost) { M.gpsLost = true; gpsState('warn', 'GPS lost…'); } }
 
   const k = 1 - Math.exp(-dt / lerp(1.6, .25, S.resp));
   const prev = M.speed;
@@ -637,7 +638,7 @@ function onPos(pos) {
   M.lastPos = pos;
   if (v !== null) { v = v < 0.6 ? 0 : v * (1 + S.cal / 100); const dtF = (now - M.gpsT) / 1000;
     M.fixA = (M.gpsOk && dtF > .3 && dtF < 3) ? clamp((v - M.fixV) / dtF, -5, 4) : 0; M.fixV = v;
-    M.target = v; M.gpsT = now; M.gpsOk = true;
+    M.target = v; M.gpsT = now; M.gpsOk = true; M.gpsLost = false;
     gpsState(c.accuracy > 30 ? 'warn' : 'ok', c.accuracy > 30 ? 'GPS weak' : 'GPS live'); }
 }
 function onGpsErr(e) {
@@ -925,6 +926,8 @@ addEventListener('blur', () => setRev(0));
 function toggleHud() { hudHidden = !hudHidden; $('hud').classList.toggle('hidden', hudHidden); $('mini').classList.toggle('show', hudHidden); $('miniU').textContent = S.unit === 'mph' ? 'mph' : 'km/h'; }
 cv.addEventListener('pointerup', () => { if (performance.now() - downAt < 300 && running) toggleHud(); });
 addEventListener('error', e => toast('Something went wrong: ' + (e.message || 'unknown error')));
+document.addEventListener('pointerdown', () => { if (AC && AC.state !== 'running') AC.resume().catch(() => {}); }, true);
+setInterval(() => { if (running && AC && AC.state !== 'running' && document.visibilityState === 'visible') toast('Sound is paused by the browser. Tap anywhere to resume it.'); }, 4000);
 
 $('leds').innerHTML = Array.from({ length: 10 }, (_, i) => `<i class="${i < 4 ? 'g' : i < 7 ? 'a' : 'r'}"></i>`).join('');
 $('ticks').innerHTML = Array.from({ length: 11 }, (_, i) => { const a = i * 27 * Math.PI / 180, r1 = i % 5 === 0 ? 34 : 36.5, r2 = 39;
