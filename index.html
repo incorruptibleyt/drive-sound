@@ -272,13 +272,16 @@ const MPH = 2.23694, KMH = 3.6;
 const PRESETS = [
   { id:'v8', name:'V8 Muscle', desc:'Deep, lumpy, loud', col:'#ff7a1a', cyl:8, idle:750, redline:6200, gears:true,
     osc:[['sawtooth',1,.55,0],['sawtooth',1,.30,9],['square',.5,.30,0],['sine',.5,.45,0],['sawtooth',2,.16,0],['sawtooth',3,.07,0]],
-    drive:3.2, lp:[220,2600,1400], noise:[.22,900,2200], lump:.35, whine:null, pops:true },
+    drive:3.2, lp:[220,2600,1400], noise:[.22,900,2200], lump:.35, whine:null, pops:true,
+    comb:{ banks:[[0,180,450,630],[90,270,360,540]], pipe:[.0050,.52], muff:[.0115,.42], lp:[260,2400,1200], drive:2.2, gain:1.6, out:.9, intake:.10, mech:.5, rough:.35, nzDecay:.9985, popP:.18, mix:1 } },
   { id:'flat6', name:'Flat-6 Sport', desc:'Raspy, high-revving', col:'#ffd23f', cyl:6, idle:850, redline:8200, gears:true,
     osc:[['sawtooth',1,.48,0],['sawtooth',1,.28,-11],['square',2,.22,0],['sawtooth',3,.16,0],['sine',.5,.26,0],['sawtooth',4,.09,0]],
-    drive:2.3, lp:[380,3600,2200], noise:[.18,1400,3200], lump:.18, whine:null, pops:true, vol:1.45 },
+    drive:2.3, lp:[380,3600,2200], noise:[.18,1400,3200], lump:.18, whine:null, pops:true, vol:1.45,
+    comb:{ banks:[[0,240,480],[120,360,600]], pipe:[.0036,.5], muff:[.0082,.38], lp:[420,3400,2000], drive:1.8, gain:1.7, out:.9, intake:.14, mech:.6, rough:.3, nzDecay:.998, popP:.12, mix:1 } },
   { id:'i4t', name:'Inline-4 Turbo', desc:'Spool, whistle, blow-off', col:'#4dd2ff', cyl:4, idle:900, redline:7200, gears:true,
     osc:[['sawtooth',1,.42,0],['square',1,.26,0],['sawtooth',2,.36,6],['sawtooth',3,.16,0],['sine',.5,.22,0]],
-    drive:2.6, lp:[300,3000,1800], noise:[.16,1200,2600], lump:.22, whine:[700,5200,.11,'rpm'], pops:true, blowoff:true, vol:1.15 },
+    drive:2.6, lp:[300,3000,1800], noise:[.16,1200,2600], lump:.22, whine:[700,5200,.11,'rpm'], pops:true, blowoff:true, vol:1.15,
+    comb:{ banks:[[0,180,360,540]], pipe:[.0042,.5], muff:[.0095,.4], lp:[340,3000,1800], drive:2.0, gain:2.2, out:.9, intake:.16, mech:.6, rough:.3, nzDecay:.998, popP:.15, mix:1 } },
   { id:'jet', name:'Jet Turbine', desc:'Spooling turbofan', col:'#b48bff', cyl:2, idle:1500, redline:12000, gears:false, top:260,
     osc:[['triangle',1,.30,0],['sine',2,.26,0],['sawtooth',3,.09,0],['sine',4.02,.14,0],['sine',6,.08,0]],
     drive:1.3, lp:[800,5000,4000], noise:[.55,900,4500], lump:0, whine:[380,3400,.26,'rpm'], pops:false, vol:1.8 },
@@ -386,104 +389,188 @@ function stepModel(now) {
 
 /* ---------- Audio engine ---------------------------------------------- */
 let AC = null, master = null, comp = null, engine = null, noiseBuf = null;
+const WK = { url: null, ready: null, ok: false };   /* the combustion worklet: loaded once per context */
 
+/* The combustion model runs in an AudioWorklet: every cylinder firing is a pressure pulse into an
+   exhaust pipe (a resonant delay line per bank), then a muffler, then the body's lowpass. A cross-
+   plane V8's banks fire unevenly, which is where the burble comes from. Intake hiss and a little
+   mechanical whir sit on top. On the overrun, some firings become afterfire pops. */
+const WORKLET_SRC = `
+class EngineProc extends AudioWorkletProcessor {
+  static get parameterDescriptors() { return [
+    { name: 'rpm', defaultValue: 800, minValue: 0, maxValue: 20000, automationRate: 'k-rate' },
+    { name: 'thr', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' } ]; }
+  constructor(o) { super(); const c = o.processorOptions; this.c = c; this.sr = sampleRate;
+    this.ang = 0;
+    this.banks = c.banks.map(b => ({ fire: b.map(d => d / 720), next: 0, env: 0, t: 1e9, nz: 0,
+      dl: new Float32Array(Math.max(8, Math.round(c.pipe[0] * sampleRate))), di: 0, lpY: 0 }));
+    this.muff = new Float32Array(Math.max(8, Math.round(c.muff[0] * sampleRate))); this.mi = 0; this.mlp = 0;
+    this.lp1 = 0; this.lp2 = 0; this.inLp = 0; this.inHp = 0; this.seed = 12345;
+  }
+  rnd() { this.seed = (this.seed * 1664525 + 1013904223) >>> 0; return this.seed / 4294967296; }
+  process(_, out, P) {
+    const o = out[0][0]; if (!o) return true;
+    const c = this.c, sr = this.sr, rpm = Math.max(60, P.rpm[0]), thr = P.thr[0];
+    const n = Math.min(1.1, Math.max(0, (rpm - c.idle) / (c.redline - c.idle)));
+    const dAng = rpm / 120 / sr;                       /* cycles per sample: a four-stroke cycle is two turns */
+    const over = thr < .1 && n > .3;
+    const lpF = c.lp[0] + c.lp[1] * thr + c.lp[2] * n, a = 1 - Math.exp(-6.2832 * lpF / sr);
+    const pipeG = c.pipe[1], muffG = c.muff[1];
+    const pipeLp = 1 - Math.exp(-6.2832 * 2400 / sr), muffLp = 1 - Math.exp(-6.2832 * 900 / sr);
+    const inG = c.intake * (0.12 + 0.88 * thr) * (0.25 + 0.75 * n), inA = 1 - Math.exp(-6.2832 * (500 + 2500 * thr) / sr);
+    const mechG = c.mech * (0.3 + 0.7 * n);
+    const pulseW = (0.0026 - 0.0013 * thr) * sr;
+    for (let i = 0; i < o.length; i++) {
+      this.ang += dAng; if (this.ang >= 1) this.ang -= 1;
+      let ex = 0;
+      for (const b of this.banks) {
+        const f = b.fire[b.next];
+        if (this.ang >= f && this.ang - f < dAng * 2) { b.next = (b.next + 1) % b.fire.length;
+          let amp = (0.22 + 0.78 * thr) * (0.88 + 0.24 * this.rnd());
+          if (over) amp = this.rnd() < c.popP ? 1.4 + 1.2 * this.rnd() : amp * 0.45;
+          b.env = amp; b.t = 0; b.nz = amp * c.rough; }
+        let p = b.t < pulseW ? b.env * Math.sin(3.14159 * b.t / pulseW) : 0; b.t++;
+        b.nz *= c.nzDecay; p += b.nz * (this.rnd() * 2 - 1);
+        const d = b.dl[b.di]; b.lpY += (d - b.lpY) * pipeLp;
+        const y = p + pipeG * b.lpY; b.dl[b.di] = y; b.di = (b.di + 1) % b.dl.length;
+        ex += y;
+      }
+      const md = this.muff[this.mi]; this.mlp += (md - this.mlp) * muffLp;
+      const m = ex + muffG * this.mlp; this.muff[this.mi] = m; this.mi = (this.mi + 1) % this.muff.length;
+      this.lp1 += (m - this.lp1) * a; this.lp2 += (this.lp1 - this.lp2) * a;
+      let s = this.lp2 * c.gain;
+      const w = this.rnd() * 2 - 1; this.inLp += (w - this.inLp) * inA; const hp = this.inLp - this.inHp; this.inHp += hp * 0.02;
+      s += hp * inG * (0.7 + 0.3 * Math.sin(this.ang * 6.2832 * c.cyl));
+      s += (this.rnd() * 2 - 1) * mechG * 0.02;
+      o[i] = Math.tanh(s * c.drive) / Math.tanh(c.drive) * c.out;
+    }
+    for (let ch = 1; ch < out[0].length; ch++) out[0][ch].set(o);
+    return true;
+  }
+}
+registerProcessor('engine', EngineProc);`;
+
+function makeNoise(ac) { const n = ac.sampleRate * 2, b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1; return b; }
+function makeLimiter(ac) { const c = ac.createDynamicsCompressor(); c.threshold.value = -6; c.knee.value = 4; c.ratio.value = 12; c.attack.value = .002; c.release.value = .2; return c; }   /* a safety limiter: the dynamics stay */
+function loadWorklet(ac) { if (!ac.audioWorklet) return Promise.resolve(false); if (!WK.url) WK.url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: 'text/javascript' })); return ac.audioWorklet.addModule(WK.url).then(() => true).catch(() => false); }
 function audioInit() {
   if (AC) return;
   AC = new (window.AudioContext || window.webkitAudioContext)();
-  comp = AC.createDynamicsCompressor();
-  comp.threshold.value = -6; comp.knee.value = 4; comp.ratio.value = 12; comp.attack.value = .002; comp.release.value = .2;   /* a safety limiter: the dynamics stay */
-  master = AC.createGain(); master.gain.value = S.vol;
+  comp = makeLimiter(AC); master = AC.createGain(); master.gain.value = S.vol;
   comp.connect(master).connect(AC.destination);
-  const n = AC.sampleRate * 2, b = AC.createBuffer(1, n, AC.sampleRate), d = b.getChannelData(0);
-  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
-  noiseBuf = b;
+  noiseBuf = makeNoise(AC);
+  WK.ready = loadWorklet(AC).then(ok => { WK.ok = ok; });
 }
 const shaperCurve = k => { const c = new Float32Array(1024); for (let i = 0; i < 1024; i++) { const x = i / 511.5 - 1; c[i] = Math.tanh(k * x) / Math.tanh(k); } return c; };
 
 class Engine {
-  constructor(p) {
-    this.p = p; const ac = AC, t = ac.currentTime;
+  constructor(p, o = {}) {
+    this.p = p; const ac = this.ac = o.ac || AC, t = ac.currentTime, dest = o.dest || comp, noise = o.noise || noiseBuf;
+    this.wk = !!(p.comb && (o.wk !== undefined ? o.wk : WK.ok));
+    this.noiseBuf = noise; this.dest = dest;
     this.out = ac.createGain(); this.out.gain.setValueAtTime(0, t); this.out.gain.linearRampToValueAtTime(1, t + .6);
-    this.out.connect(comp);
-    this.lp = ac.createBiquadFilter(); this.lp.type = 'lowpass'; this.lp.Q.value = .9; this.lp.connect(this.out);
-    this.body = ac.createGain(); this.body.gain.value = .9; this.body.connect(this.lp);
-    this.shaper = ac.createWaveShaper(); this.shaper.curve = shaperCurve(p.drive); this.shaper.oversample = '2x'; this.shaper.connect(this.body);
+    this.out.connect(dest);
+    this.body = ac.createGain(); this.body.gain.value = .9;
     this.lim = ac.createGain(); this.lim.gain.value = 1; this.lim.connect(this.body);   /* the rev limiter's cut */
-    this.shaper.disconnect(); this.shaper.connect(this.lim);
-    this.lump = ac.createGain(); this.lump.gain.value = 1; this.lump.connect(this.shaper);
-    this.oscs = p.osc.map(([type, ratio, g, cents]) => {
-      const o = ac.createOscillator(), gn = ac.createGain();
-      o.type = type; o.detune.value = cents; gn.gain.value = g; o.connect(gn).connect(this.lump); o.start();
-      return { o, ratio };
-    });
-    /* idle lumpiness: an LFO at a fraction of the firing frequency */
-    this.lfo = ac.createOscillator(); this.lfo.type = 'sine'; this.lfoG = ac.createGain(); this.lfoG.gain.value = 0;
-    this.lfo.connect(this.lfoG).connect(this.lump.gain); this.lfo.start();
-    /* exhaust and intake noise */
-    this.noise = ac.createBufferSource(); this.noise.buffer = noiseBuf; this.noise.loop = true;
-    this.bp = ac.createBiquadFilter(); this.bp.type = 'bandpass'; this.bp.Q.value = .7;
-    this.noiseG = ac.createGain(); this.noiseG.gain.value = 0;
-    this.noise.connect(this.bp).connect(this.noiseG).connect(this.lp); this.noise.start();
+    if (this.wk) {
+      /* the combustion model, straight into the limiter */
+      this.node = new AudioWorkletNode(ac, 'engine', { numberOfInputs: 0, outputChannelCount: [1], processorOptions: Object.assign({ cyl: p.cyl, idle: p.idle, redline: p.redline }, p.comb) });
+      this.node.connect(this.lim); this.body.connect(this.out);
+      this.prm = { rpm: this.node.parameters.get('rpm'), thr: this.node.parameters.get('thr') };
+    } else {
+      /* the oscillator engine: harmonics of the firing frequency through a soft clip and a lowpass */
+      this.lp = ac.createBiquadFilter(); this.lp.type = 'lowpass'; this.lp.Q.value = .9; this.lp.connect(this.out);
+      this.body.connect(this.lp);
+      this.shaper = ac.createWaveShaper(); this.shaper.curve = shaperCurve(p.drive); this.shaper.oversample = '2x'; this.shaper.connect(this.lim);
+      this.lump = ac.createGain(); this.lump.gain.value = 1; this.lump.connect(this.shaper);
+      this.oscs = p.osc.map(([type, ratio, g, cents]) => {
+        const osc = ac.createOscillator(), gn = ac.createGain();
+        osc.type = type; osc.detune.value = cents; gn.gain.value = g; osc.connect(gn).connect(this.lump); osc.start();
+        return { o: osc, ratio };
+      });
+      this.lfo = ac.createOscillator(); this.lfo.type = 'sine'; this.lfoG = ac.createGain(); this.lfoG.gain.value = 0;
+      this.lfo.connect(this.lfoG).connect(this.lump.gain); this.lfo.start();
+      this.noise = ac.createBufferSource(); this.noise.buffer = noise; this.noise.loop = true;
+      this.bp = ac.createBiquadFilter(); this.bp.type = 'bandpass'; this.bp.Q.value = .7;
+      this.noiseG = ac.createGain(); this.noiseG.gain.value = 0;
+      this.noise.connect(this.bp).connect(this.noiseG).connect(this.lp); this.noise.start();
+      if (p.vibrato) { this.vib = ac.createOscillator(); this.vib.frequency.value = 4.5; this.vibG = ac.createGain(); this.vibG.gain.value = 6;
+        this.vib.connect(this.vibG); this.oscs.forEach(x => this.vibG.connect(x.o.detune)); this.vib.start(); }
+    }
     /* whine: turbo, turbine or inverter */
     if (p.whine) {
       this.wh = ac.createOscillator(); this.wh.type = 'sine'; this.whG = ac.createGain(); this.whG.gain.value = 0;
       this.wh2 = ac.createOscillator(); this.wh2.type = 'triangle'; this.wh2.detune.value = 1203; this.wh2G = ac.createGain(); this.wh2G.gain.value = 0;
       this.wh.connect(this.whG).connect(this.out); this.wh2.connect(this.wh2G).connect(this.out); this.wh.start(); this.wh2.start();
     }
-    if (p.vibrato) { this.vib = ac.createOscillator(); this.vib.frequency.value = 4.5; this.vibG = ac.createGain(); this.vibG.gain.value = 6;
-      this.vib.connect(this.vibG); this.oscs.forEach(x => this.vibG.connect(x.o.detune)); this.vib.start(); }
     this.lastThr = 0; this.popT = 0; this.boT = 0; this.limK = 0;
   }
-  update(rpm, thr, dt) {
-    const p = this.p, ac = AC, t = ac.currentTime, tc = .045;
-    const f0 = (rpm / 60) * (p.cyl / 2);
+  update(rpm, thr, dt, t = this.ac.currentTime) {
+    const p = this.p, tc = .045;
     const n = clamp((rpm - p.idle) / (p.redline - p.idle), 0, 1.05);
-    for (const { o, ratio } of this.oscs) o.frequency.setTargetAtTime(f0 * ratio, t, tc);
-    this.lfo.frequency.setTargetAtTime(Math.max(2, f0 / 6), t, tc);
-    this.lfoG.gain.setTargetAtTime(p.lump * (1 - n) * (1 - thr * .5), t, .1);
     const load = thr * .75 + n * .25;
-    this.lp.frequency.setTargetAtTime(p.lp[0] + p.lp[1] * load + p.lp[2] * n, t, .06);
+    if (this.wk) {
+      this.prm.rpm.setTargetAtTime(rpm, t, .03); this.prm.thr.setTargetAtTime(thr, t, .05);
+    } else {
+      const f0 = (rpm / 60) * (p.cyl / 2);
+      for (const { o, ratio } of this.oscs) o.frequency.setTargetAtTime(f0 * ratio, t, tc);
+      this.lfo.frequency.setTargetAtTime(Math.max(2, f0 / 6), t, tc);
+      this.lfoG.gain.setTargetAtTime(p.lump * (1 - n) * (1 - thr * .5), t, .1);
+      this.lp.frequency.setTargetAtTime(p.lp[0] + p.lp[1] * load + p.lp[2] * n, t, .06);
+      this.bp.frequency.setTargetAtTime(p.noise[1] + (p.noise[2] - p.noise[1]) * load, t, .08);
+      this.noiseG.gain.setTargetAtTime(p.noise[0] * (.25 + .75 * load) * (0.5 + 0.5 * n), t, .08);
+    }
     const lvl = (.14 + .86 * Math.pow(clamp(thr * .65 + n * .35, 0, 1), 1.15)) * (p.vol || 1);   /* idle is quiet, full throttle is loud */
-    this.body.gain.setTargetAtTime(lvl, t, .08);
+    this.body.gain.setTargetAtTime(this.wk ? lvl * (p.comb.mix || 1) : lvl, t, .08);
     if (p.gears && n >= 1.0) { this.lim.gain.setTargetAtTime((this.limK++ & 1) ? .2 : 1, t, .008); }   /* bouncing off the limiter */
     else if (this.lim.gain.value < 1) this.lim.gain.setTargetAtTime(1, t, .02);
-    this.bp.frequency.setTargetAtTime(p.noise[1] + (p.noise[2] - p.noise[1]) * load, t, .08);
-    this.noiseG.gain.setTargetAtTime(p.noise[0] * (.25 + .75 * load) * (0.5 + 0.5 * n), t, .08);
     if (this.wh) {
       const [a, b, g] = p.whine;
       this.wh.frequency.setTargetAtTime(a + b * n, t, .12); this.wh2.frequency.setTargetAtTime((a + b * n) * .5, t, .12);
       this.whG.gain.setTargetAtTime(g * (.15 + .85 * thr) * (.3 + .7 * n), t, .15);
       this.wh2G.gain.setTargetAtTime(g * .35 * thr * n, t, .15);
     }
-    /* overrun pops and the turbo's blow-off when the throttle is dropped high in the revs */
-    if (p.blowoff && this.lastThr - thr > .25 && n > .4 && t - this.boT > 1.2) { this.boT = t; this.blowoff(n); }
-    if (p.pops && thr < .12 && n > .35) { this.popT -= dt; if (this.popT <= 0) { this.pop(n); this.popT = .05 + Math.random() * .22 * (1.4 - n); } }
+    /* the turbo's blow-off when the throttle is dropped high in the revs; overrun pops for the oscillator engines (the worklet makes its own) */
+    if (p.blowoff && this.lastThr - thr > .25 && n > .4 && t - this.boT > 1.2) { this.boT = t; this.blowoff(n, t); }
+    if (!this.wk && p.pops && thr < .12 && n > .35) { this.popT -= dt; if (this.popT <= 0) { this.pop(n, t); this.popT = .05 + Math.random() * .22 * (1.4 - n); } }
     this.lastThr = lerp(this.lastThr, thr, .3);
   }
-  pop(n) {
-    const ac = AC, t = ac.currentTime, s = ac.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
-    const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 120 + Math.random() * 220; f.Q.value = 2;
-    const g = ac.createGain(); g.gain.setValueAtTime(.5 + .4 * n, t); g.gain.exponentialRampToValueAtTime(.001, t + .06 + Math.random() * .05);
-    s.connect(f).connect(g).connect(comp); s.start(t); s.stop(t + .15);
+  burst(t, filt, gainAt, len) {
+    const ac = this.ac, s = ac.createBufferSource(); s.buffer = this.noiseBuf; s.loop = true;
+    const f = ac.createBiquadFilter(); filt(f, t); const g = ac.createGain(); gainAt(g.gain, t);
+    s.connect(f).connect(g).connect(this.dest); s.start(t); s.stop(t + len);
   }
-  clunk() {
-    const ac = AC, t = ac.currentTime, s = ac.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
-    const f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 420; f.Q.value = 1.5;
-    const g = ac.createGain(); g.gain.setValueAtTime(.22, t); g.gain.exponentialRampToValueAtTime(.001, t + .07);
-    s.connect(f).connect(g).connect(comp); s.start(t); s.stop(t + .1);
-  }
-  blowoff(n) {
-    const ac = AC, t = ac.currentTime, s = ac.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
-    const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.4;
-    f.frequency.setValueAtTime(3500, t); f.frequency.exponentialRampToValueAtTime(900, t + .45);
-    const g = ac.createGain(); g.gain.setValueAtTime(.001, t); g.gain.exponentialRampToValueAtTime(.35 * n, t + .03); g.gain.exponentialRampToValueAtTime(.001, t + .5);
-    s.connect(f).connect(g).connect(comp); s.start(t); s.stop(t + .55);
-  }
+  pop(n, t = this.ac.currentTime) { this.burst(t, f => { f.type = 'bandpass'; f.frequency.value = 120 + Math.random() * 220; f.Q.value = 2; },
+    (g, t) => { g.setValueAtTime(.5 + .4 * n, t); g.exponentialRampToValueAtTime(.001, t + .06 + Math.random() * .05); }, .15); }
+  clunk(t = this.ac.currentTime) { this.burst(t, f => { f.type = 'lowpass'; f.frequency.value = 420; f.Q.value = 1.5; },
+    (g, t) => { g.setValueAtTime(.22, t); g.exponentialRampToValueAtTime(.001, t + .07); }, .1); }
+  blowoff(n, t = this.ac.currentTime) { this.burst(t, (f, t) => { f.type = 'bandpass'; f.Q.value = 1.4; f.frequency.setValueAtTime(3500, t); f.frequency.exponentialRampToValueAtTime(900, t + .45); },
+    (g, t) => { g.setValueAtTime(.001, t); g.exponentialRampToValueAtTime(.35 * n, t + .03); g.exponentialRampToValueAtTime(.001, t + .5); }, .55); }
   dispose() {
-    const t = AC.currentTime; this.out.gain.setTargetAtTime(0, t, .12);
-    setTimeout(() => { try { this.oscs.forEach(x => x.o.stop()); this.lfo.stop(); this.noise.stop(); if (this.wh) { this.wh.stop(); this.wh2.stop(); } if (this.vib) this.vib.stop(); this.out.disconnect(); } catch {} }, 700);
+    const t = this.ac.currentTime; this.out.gain.setTargetAtTime(0, t, .12);
+    setTimeout(() => { try { if (this.wk) this.node.disconnect(); else { this.oscs.forEach(x => x.o.stop()); this.lfo.stop(); this.noise.stop(); if (this.vib) this.vib.stop(); }
+      if (this.wh) { this.wh.stop(); this.wh2.stop(); } this.out.disconnect(); } catch {} }, 700);
   }
 }
+
+/* An offline render of an engine, for listening without a car: idle, a pull to the redline, a cruise, a lift-off, idle. */
+async function renderClip(id, secs = 9) {
+  const p = PRESETS.find(x => x.id === id), sr = 48000, ac = new OfflineAudioContext(1, Math.ceil(secs * sr), sr);
+  const wk = await loadWorklet(ac), dest = makeLimiter(ac), g = ac.createGain(); g.gain.value = .7; dest.connect(g).connect(ac.destination);
+  const e = new Engine(p, { ac, dest, noise: makeNoise(ac), wk });
+  const span = p.redline - p.idle;
+  for (let t = 0; t < secs; t += 1 / 30) {
+    let n, thr;
+    if (t < 1.5) { n = 0; thr = .05; }
+    else if (t < 4.2) { n = Math.pow((t - 1.5) / 2.7, 1.3) * 1.0; thr = .95; }
+    else if (t < 5.8) { n = .55 + .05 * Math.sin(t * 3); thr = .4; }
+    else if (t < 7.6) { n = .55 * Math.exp(-(t - 5.8) * 1.3); thr = 0; }
+    else { n = 0; thr = .05; }
+    e.update(p.idle + n * span, thr, 1 / 30, t);
+  }
+  const buf = await ac.startRendering(); return buf.getChannelData(0);
+}
+
 function setEngine(id) {
   S.preset = id; save();
   document.documentElement.style.setProperty('--accent', preset().col);
@@ -727,6 +814,7 @@ function frame(now) {
 async function start() {
   audioInit();
   try { await AC.resume(); } catch {}
+  await WK.ready;
   clearInterval(prevIv);
   if (!engine) engine = new Engine(preset());
   running = true; lastFrame = performance.now(); M.t = lastFrame;
@@ -750,7 +838,7 @@ $('presets').addEventListener('click', e => { const b = e.target.closest('[data-
 $('choices').addEventListener('click', e => { const b = e.target.closest('[data-id]'); if (b) { setEngine(b.dataset.id); previewRev(); } });
 let prevIv = 0;
 async function previewRev() {   /* a short rev of the chosen engine, before Start */
-  if (running) return; audioInit(); try { await AC.resume(); } catch {} if (running) return;
+  if (running) return; audioInit(); try { await AC.resume(); } catch {} await WK.ready; if (running) return;
   if (!engine) engine = new Engine(preset());
   clearInterval(prevIv); let t = 0;
   prevIv = setInterval(() => { if (running) { clearInterval(prevIv); return; } t += .033; const p = preset(), n = t < .9 ? t / .9 : Math.max(0, 1 - (t - .9) / .8);
