@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07090f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Drive Sound">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2307090f'/%3E%3Ccircle cx='32' cy='34' r='18' fill='none' stroke='%23ff7a1a' stroke-width='6' stroke-dasharray='85 200' transform='rotate(135 32 34)'/%3E%3C/svg%3E">
+<title>Drive Sound</title>
+<meta name="description" content="Engine and sci-fi drive sounds that follow your real speed. Runs in any browser, nothing to install.">
+<style>
+  :root{
+    --bg:#07090f; --panel:rgba(14,18,28,.72); --line:rgba(255,255,255,.08);
+    --fg:#eef1f7; --mute:#8d96a8; --accent:#ff7a1a; --accent2:#ffb15c;
+    --danger:#ff4d4d; --ok:#45d483; --warn:#ffcc4d; --glow:#ff7a1a66; --tint:#ff7a1a2e;
+    --radius:18px; --pad:clamp(14px,2.2vw,28px);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,"SF Pro Display","Segoe UI",Roboto,Inter,Helvetica,Arial,sans-serif;
+    overflow:hidden;user-select:none;-webkit-user-select:none}
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  #scene{position:fixed;inset:0;width:100%;height:100%;display:block}
+
+  /* ---------- HUD ---------- */
+  #hud{position:fixed;inset:0;display:flex;flex-direction:column;justify-content:space-between;
+    padding:calc(var(--pad) + env(safe-area-inset-top)) var(--pad) calc(var(--pad) + env(safe-area-inset-bottom));
+    pointer-events:none;transition:opacity .4s}
+  #hud.hidden{opacity:0;visibility:hidden;transition:opacity .4s,visibility 0s .4s}
+  #hud > *{pointer-events:auto}
+  .row{display:flex;align-items:center;gap:12px}
+  .top{justify-content:space-between}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.14em;font-size:13px;text-transform:uppercase;color:var(--mute)}
+  .brand i{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 14px var(--accent)}
+  .pill{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border-radius:999px;background:var(--panel);
+    border:1px solid var(--line);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);font-size:13px;font-weight:600;letter-spacing:.02em;min-height:44px}
+  .pill .dot{width:8px;height:8px;border-radius:50%;background:var(--mute)}
+  .pill.ok .dot{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+  .pill.warn .dot{background:var(--warn);box-shadow:0 0 10px var(--warn)}
+  .pill.bad .dot{background:var(--danger);box-shadow:0 0 10px var(--danger)}
+  .icon{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--panel);border:1px solid var(--line);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .icon svg{width:20px;height:20px;fill:none;stroke:var(--fg);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+  /* centre cluster */
+  .cluster{display:flex;align-items:center;justify-content:center;gap:clamp(18px,4vw,64px);flex-wrap:wrap}
+  .speed{position:relative;text-align:center;min-width:220px}
+  .speed .num{font-size:clamp(84px,18vw,190px);font-weight:200;line-height:.9;letter-spacing:-.04em;
+    font-variant-numeric:tabular-nums;text-shadow:0 2px 18px rgba(0,0,0,.85),0 0 40px rgba(255,255,255,.14),0 0 90px var(--glow);transition:text-shadow .3s}
+  .speed .unit{font-size:clamp(13px,1.6vw,18px);letter-spacing:.3em;text-transform:uppercase;color:var(--mute);margin-top:10px;font-weight:600;text-shadow:0 1px 8px rgba(0,0,0,.8)}
+  .tach{position:relative;width:clamp(170px,22vw,260px);height:clamp(170px,22vw,260px)}
+  .tach svg{width:100%;height:100%;transform:rotate(135deg)}
+  .tach .track{stroke:rgba(255,255,255,.08);fill:none;stroke-width:9;stroke-linecap:round}
+  .tach .red{stroke:rgba(255,77,77,.35);fill:none;stroke-width:9;stroke-linecap:round}
+  .tach .bar{stroke:var(--accent);fill:none;stroke-width:9;stroke-linecap:round;transition:stroke .3s}
+  .tach .halo{stroke:var(--accent);fill:none;stroke-width:18;stroke-linecap:round;opacity:.22;transition:stroke .3s}
+  .tach .tick{stroke:rgba(255,255,255,.35);stroke-width:1.6;stroke-linecap:round}
+  .tach .tick.r{stroke:rgba(255,77,77,.8)}
+  .tach .lbl{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+  .tach .rpm{font-size:clamp(24px,3.4vw,40px);font-weight:300;font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1;text-shadow:0 2px 12px rgba(0,0,0,.8)}
+  .tach .sub{font-size:10px;letter-spacing:.3em;color:var(--mute);text-transform:uppercase;font-weight:600;margin-top:3px}
+  .tach .gear{margin-top:8px;font-size:clamp(28px,3.6vw,44px);font-weight:600;color:var(--accent2);line-height:1;text-shadow:0 2px 12px rgba(0,0,0,.8)}
+  .tach .gear small{font-size:11px;letter-spacing:.3em;color:var(--mute);display:block;font-weight:600;margin-top:4px}
+  .leds{display:flex;justify-content:center;gap:clamp(6px,1vw,12px);width:100%;margin-bottom:clamp(8px,2vh,22px)}
+  .leds i{width:clamp(10px,1.3vw,16px);height:clamp(10px,1.3vw,16px);border-radius:50%;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.08);transition:background .08s,box-shadow .08s}
+  .leds i.g.on{background:#45d483;box-shadow:0 0 12px #45d483}
+  .leds i.a.on{background:#ffcc4d;box-shadow:0 0 12px #ffcc4d}
+  .leds i.r.on{background:#ff4d4d;box-shadow:0 0 14px #ff4d4d}
+  .leds.blink i.on{animation:blink .12s steps(2) infinite}
+  @keyframes blink{to{opacity:.25}}
+  #hud .mid{display:flex;flex-direction:column;align-items:center;pointer-events:none}   /* gauges take no taps: a tap there reaches the scene */
+  #mini{position:fixed;top:calc(var(--pad) + env(safe-area-inset-top));right:var(--pad);display:none;align-items:baseline;gap:8px;opacity:0;transition:opacity .4s;pointer-events:none}
+  #mini.show{display:flex;opacity:.85}
+  #mini b{font-size:40px;font-weight:200;font-variant-numeric:tabular-nums;letter-spacing:-.03em}
+  #mini span{font-size:11px;letter-spacing:.3em;text-transform:uppercase;color:var(--mute);font-weight:600}
+  #flash{position:fixed;inset:0;pointer-events:none;background:radial-gradient(80% 60% at 50% 50%,transparent 60%,var(--glow) 100%);opacity:0;transition:opacity .5s}
+  #flash.on{opacity:.9;transition:opacity .05s}
+  .throttle{width:8px;height:clamp(150px,20vw,230px);border-radius:999px;background:rgba(255,255,255,.07);position:relative;overflow:hidden}
+  .throttle i{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(to top,var(--accent),var(--accent2));height:0%;border-radius:999px;transition:height .12s linear}
+
+  /* bottom */
+  .bottom{display:flex;flex-direction:column;gap:14px}
+  .presets{display:flex;gap:10px;overflow-x:auto;padding:4px 2px;scrollbar-width:none}
+  .presets::-webkit-scrollbar{display:none}
+  .preset{flex:0 0 auto;min-width:150px;padding:12px 14px;border-radius:16px;background:var(--panel);border:1px solid var(--line);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);text-align:left;transition:transform .15s,border-color .2s,background .2s}
+  .preset:active{transform:scale(.97)}
+  .preset b{display:block;font-size:15px;font-weight:600}
+  .preset span{display:block;font-size:12px;color:var(--mute);margin-top:3px}
+  .preset.on{border-color:var(--accent);background:linear-gradient(180deg,var(--tint),transparent)}
+  .preset .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}
+  .volrow{display:flex;align-items:center;gap:12px}
+  .volrow svg{width:20px;height:20px;fill:none;stroke:var(--mute);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+  input[type=range]{-webkit-appearance:none;appearance:none;flex:1;height:44px;background:transparent;margin:0}
+  input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:999px;background:rgba(255,255,255,.12)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:26px;height:26px;border-radius:50%;background:#fff;margin-top:-10px;box-shadow:0 2px 10px rgba(0,0,0,.5)}
+  input[type=range]::-moz-range-track{height:6px;border-radius:999px;background:rgba(255,255,255,.12)}
+  input[type=range]::-moz-range-thumb{width:26px;height:26px;border:0;border-radius:50%;background:#fff}
+  .demo{display:none;align-items:center;gap:12px;padding:10px 14px;border-radius:16px;background:var(--panel);border:1px dashed rgba(255,204,77,.45)}
+  .demo.show{display:flex}
+  .demo label{font-size:12px;color:var(--warn);letter-spacing:.2em;text-transform:uppercase;font-weight:700;white-space:nowrap}
+  .demo .val{font-variant-numeric:tabular-nums;min-width:70px;text-align:right;font-weight:600}
+  .btn{padding:0 18px;min-height:44px;border-radius:999px;font-weight:600;font-size:14px;background:rgba(255,255,255,.1);border:1px solid var(--line)}
+  .btn.on{background:var(--warn);color:#1a1400}
+
+  /* ---------- Start screen ---------- */
+  #start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:var(--pad);
+    background:radial-gradient(120% 90% at 50% 110%,var(--glow),transparent 60%),linear-gradient(180deg,#06080d,#0b0f18);
+    transition:opacity .6s,visibility .6s;z-index:10}
+  #start.gone{opacity:0;visibility:hidden}
+  .card{width:min(920px,100%);display:grid;grid-template-columns:1.1fr .9fr;gap:clamp(20px,4vw,56px);align-items:center}
+  @media (max-width:760px){.card{grid-template-columns:1fr}}
+  .eyebrow{font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:var(--accent);font-weight:700}
+  h1{font-size:clamp(38px,6vw,72px);line-height:1;margin:14px 0 16px;font-weight:300;letter-spacing:-.03em}
+  h1 b{font-weight:700}
+  .lead{color:var(--mute);font-size:clamp(15px,1.6vw,18px);line-height:1.5;max-width:46ch;margin:0 0 26px}
+  .go{display:inline-flex;align-items:center;gap:14px;padding:18px 28px;border-radius:999px;background:var(--accent);color:#1a0c00;
+    font-weight:700;font-size:17px;letter-spacing:.02em;box-shadow:0 10px 40px var(--glow);transition:transform .15s,background .3s}
+  .go:active{transform:scale(.97)}
+  .go svg{width:22px;height:22px;fill:#1a0c00}
+  .tiny{margin-top:16px;font-size:13px;color:var(--mute);line-height:1.5}
+  .tiny a{color:var(--fg)}
+  .choices{display:grid;gap:10px}
+  .choice{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.04);border:1px solid var(--line);text-align:left;transition:border-color .2s,background .2s}
+  .choice.on{border-color:var(--accent);background:var(--tint)}
+  .choice .sw{width:12px;height:12px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 12px currentColor}
+  .choice b{display:block;font-size:15px;font-weight:600}
+  .choice span{display:block;font-size:12.5px;color:var(--mute);margin-top:2px}
+
+  /* ---------- Settings sheet ---------- */
+  #sheet{position:fixed;inset:0;z-index:20;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.45)}
+  #sheet.open{display:flex}
+  .sheet{width:min(680px,100%);max-height:88vh;overflow:auto;background:#0e121b;border:1px solid var(--line);border-radius:24px 24px 0 0;padding:22px var(--pad) calc(22px + env(safe-area-inset-bottom))}
+  @media (min-width:760px){#sheet{align-items:center}.sheet{border-radius:24px}}
+  .sheet h2{margin:0 0 6px;font-size:20px;font-weight:600}
+  .sheet p{margin:0 0 18px;color:var(--mute);font-size:14px;line-height:1.5}
+  .set{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 0;border-top:1px solid var(--line)}
+  .set .t b{display:block;font-size:15px;font-weight:600}
+  .set .t span{display:block;font-size:12.5px;color:var(--mute);margin-top:2px}
+  .seg{display:inline-flex;background:rgba(255,255,255,.06);border-radius:999px;padding:3px;flex:0 0 auto}
+  .seg button{padding:9px 14px;border-radius:999px;font-size:13px;font-weight:600;color:var(--mute);min-height:38px}
+  .seg button.on{background:#fff;color:#0b0f18}
+  .set input[type=range]{max-width:200px}
+  .close{margin-top:14px;width:100%;min-height:48px;border-radius:14px;background:rgba(255,255,255,.08);font-weight:600}
+
+  #toast{position:fixed;left:50%;bottom:calc(120px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);opacity:0;
+    background:rgba(20,24,34,.92);border:1px solid var(--line);padding:12px 18px;border-radius:14px;font-size:14px;max-width:90vw;text-align:center;
+    transition:opacity .3s,transform .3s;pointer-events:none;z-index:30}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .shift{height:1.5em;margin-bottom:6px;font-size:clamp(14px,2vw,22px);letter-spacing:.4em;text-transform:uppercase;
+    color:var(--accent2);opacity:0;transition:opacity .25s;pointer-events:none;font-weight:700}
+  .shift.show{opacity:.9}
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div id="hud" class="hidden">
+  <div class="row top">
+    <div class="brand"><i id="brandDot"></i>Drive Sound</div>
+    <div class="row">
+      <div class="pill" id="gps"><span class="dot"></span><span id="gpsText">GPS off</span></div>
+      <button class="pill" id="unitBtn" aria-label="Change units">mph</button>
+      <button class="icon" id="setBtn" aria-label="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="mid">
+  <div class="shift" id="shiftLbl">Shift</div>
+  <div class="leds" id="leds"></div>
+  <div class="cluster">
+    <div class="tach">
+      <svg viewBox="0 0 100 100">
+        <circle class="track" cx="50" cy="50" r="44" stroke-dasharray="207 276"/>
+        <g id="ticks"></g>
+        <circle class="red" cx="50" cy="50" r="44" id="redArc" stroke-dasharray="0 276" stroke-dashoffset="0"/>
+        <circle class="halo" cx="50" cy="50" r="44" id="rpmHalo" stroke-dasharray="0 276"/>
+        <circle class="bar" cx="50" cy="50" r="44" id="rpmArc" stroke-dasharray="0 276"/>
+      </svg>
+      <div class="lbl">
+        <div class="rpm" id="rpm">0</div>
+        <div class="sub">rpm</div>
+        <div class="gear"><span id="gearN">N</span><small>gear</small></div>
+      </div>
+    </div>
+    <div class="speed">
+      <div class="num" id="speed">0</div>
+      <div class="unit" id="unitLbl">mph</div>
+    </div>
+    <div class="throttle" title="Throttle"><i id="thr"></i></div>
+  </div>
+  </div>
+
+  <div class="bottom">
+    <div class="demo" id="demo">
+      <label>Demo</label>
+      <input type="range" id="demoSpeed" min="0" max="160" value="0" step="1">
+      <div class="val" id="demoVal">0 mph</div>
+      <button class="btn" id="autoBtn">Auto drive</button>
+    </div>
+    <div class="presets" id="presets"></div>
+    <div class="volrow">
+      <svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+      <input type="range" id="vol" min="0" max="1" step="0.01" value="0.7" aria-label="Volume">
+    </div>
+  </div>
+</div>
+<div id="flash"></div>
+<div id="mini"><b id="miniN">0</b><span id="miniU">mph</span></div>
+
+<div id="start">
+  <div class="card">
+    <div>
+      <div class="eyebrow">Your car. A new voice.</div>
+      <h1>Drive <b>Sound</b></h1>
+      <p class="lead">Engine and sci-fi sounds that follow your real speed, with a virtual gearbox and a scene that moves with you. Nothing to install: play it through the car's speakers or a Bluetooth speaker.</p>
+      <button class="go" id="go"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>Start engine</button>
+      <p class="tiny">Your browser will ask to use your location. That is how it reads your speed; nothing is stored or sent anywhere. No signal, or testing on a couch? Use <b>Demo</b> in settings.</p>
+    </div>
+    <div class="choices" id="choices"></div>
+  </div>
+</div>
+
+<div id="sheet">
+  <div class="sheet">
+    <h2>Settings</h2>
+    <p>Everything here is saved on this device.</p>
+    <div class="set"><div class="t"><b>Speed source</b><span>GPS reads the car's real speed. Demo gives you a slider.</span></div>
+      <div class="seg" id="srcSeg"><button data-v="gps">GPS</button><button data-v="demo">Demo</button></div></div>
+    <div class="set"><div class="t"><b>Units</b></div>
+      <div class="seg" id="unitSeg"><button data-v="mph">mph</button><button data-v="kmh">km/h</button></div></div>
+    <div class="set"><div class="t"><b>Gearbox</b><span>How late it shifts. Sport holds each gear longer.</span></div>
+      <div class="seg" id="shiftSeg"><button data-v="relaxed">Relaxed</button><button data-v="normal">Normal</button><button data-v="sport">Sport</button></div></div>
+    <div class="set"><div class="t"><b>Response</b><span>How quickly the sound follows a change of speed.</span></div>
+      <input type="range" id="resp" min="0.2" max="1" step="0.05" value="0.6"></div>
+    <div class="set"><div class="t"><b>Calibration</b><span>Match the dash: GPS usually reads a little under it. <b id="calVal">0%</b></span></div>
+      <input type="range" id="cal" min="-10" max="10" step="0.5" value="0"></div>
+    <div class="set"><div class="t"><b>Trip</b><span id="tripLine">—</span></div>
+      <button class="btn" id="tripReset">Reset</button></div>
+    <div class="set"><div class="t"><b>Scenery</b><span>Turn off to save battery on a phone.</span></div>
+      <div class="seg" id="sceneSeg"><button data-v="on">On</button><button data-v="off">Off</button></div></div>
+    <div class="set"><div class="t"><b>Keep screen awake</b><span>Where the browser allows it.</span></div>
+      <div class="seg" id="wakeSeg"><button data-v="on">On</button><button data-v="off">Off</button></div></div>
+    <button class="close" id="closeSheet">Done</button>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+/* =====================================================================
+   Drive Sound: an engine-sound simulator that follows GPS speed.
+   One file, no libraries. Audio is synthesised with the Web Audio API,
+   so there are no sound files to download and nothing to license.
+   ===================================================================== */
+
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+const MPH = 2.23694, KMH = 3.6;
+
+/* ---------- Presets --------------------------------------------------
+   cyl: cylinders (sets the firing frequency), idle/redline in rpm,
+   gears: whether the virtual gearbox is used, osc: harmonics of the
+   firing frequency, drive: distortion, lp: lowpass base/throttle/rpm,
+   noise: exhaust/intake hiss, whine: turbo/turbine/inverter tone.      */
+const PRESETS = [
+  { id:'v8', name:'V8 Muscle', desc:'Deep, lumpy, loud', col:'#ff7a1a', cyl:8, idle:750, redline:6200, gears:true,
+    osc:[['sawtooth',1,.55,0],['sawtooth',1,.30,9],['square',.5,.30,0],['sine',.5,.45,0],['sawtooth',2,.16,0],['sawtooth',3,.07,0]],
+    drive:3.2, lp:[220,2600,1400], noise:[.22,900,2200], lump:.35, whine:null, pops:true },
+  { id:'flat6', name:'Flat-6 Sport', desc:'Raspy, high-revving', col:'#ffd23f', cyl:6, idle:850, redline:8200, gears:true,
+    osc:[['sawtooth',1,.48,0],['sawtooth',1,.28,-11],['square',2,.22,0],['sawtooth',3,.16,0],['sine',.5,.26,0],['sawtooth',4,.09,0]],
+    drive:2.3, lp:[380,3600,2200], noise:[.18,1400,3200], lump:.18, whine:null, pops:true, vol:1.45 },
+  { id:'i4t', name:'Inline-4 Turbo', desc:'Spool, whistle, blow-off', col:'#4dd2ff', cyl:4, idle:900, redline:7200, gears:true,
+    osc:[['sawtooth',1,.42,0],['square',1,.26,0],['sawtooth',2,.36,6],['sawtooth',3,.16,0],['sine',.5,.22,0]],
+    drive:2.6, lp:[300,3000,1800], noise:[.16,1200,2600], lump:.22, whine:[700,5200,.11,'rpm'], pops:true, blowoff:true, vol:1.15 },
+  { id:'jet', name:'Jet Turbine', desc:'Spooling turbofan', col:'#b48bff', cyl:2, idle:1500, redline:12000, gears:false, top:260,
+    osc:[['triangle',1,.30,0],['sine',2,.26,0],['sawtooth',3,.09,0],['sine',4.02,.14,0],['sine',6,.08,0]],
+    drive:1.3, lp:[800,5000,4000], noise:[.55,900,4500], lump:0, whine:[380,3400,.26,'rpm'], pops:false, vol:1.8 },
+  { id:'ship', name:'Starship', desc:'Warp hum, shimmer', col:'#53f3c3', cyl:2, idle:2400, redline:9600, gears:false, top:220,
+    osc:[['sine',1,.42,0],['triangle',2,.22,-14],['triangle',2,.22,14],['sine',3,.14,0],['sine',4,.10,0],['sine',6,.07,7]],
+    drive:1.1, lp:[500,6000,3000], noise:[.08,600,1600], lump:0, whine:[1200,2600,.07,'rpm'], pops:false, vibrato:true, vol:1.3 },
+  { id:'ev', name:'Electric', desc:'Quiet motor whine', col:'#9bffb0', cyl:2, idle:600, redline:16000, gears:false, top:240,
+    osc:[['sine',1,.34,0],['sine',2,.16,0],['square',4,.045,0],['sine',8,.05,0]],
+    drive:1.0, lp:[600,6000,6000], noise:[.07,1500,4000], lump:0, whine:[1800,7000,.045,'rpm'], pops:false, vol:1.25 },
+];
+const GEAR_TOP_KMH = [46, 82, 122, 168, 218, 275];     /* speed at redline in each gear */
+const SHIFT = { relaxed:[.62,.18], normal:[.72,.22], sport:[.86,.30] };   /* upshift at × redline + throttle bonus, downshift below × */
+
+/* ---------- Settings -------------------------------------------------- */
+const SAVED = (() => { try { return JSON.parse(localStorage.getItem('drivesound.v1') || '{}'); } catch { return {}; } })();
+const S = Object.assign({ preset:'v8', unit:'mph', src:'gps', shift:'normal', resp:.6, scene:'on', wake:'on', vol:.7, cal:0, best:null, trip:{ m:0, top:0 } }, SAVED);
+/* a saved value is only trusted when it makes sense */
+const oneOf = (v, list, d) => list.includes(v) ? v : d, num = (v, a, b, d) => (typeof v === 'number' && isFinite(v)) ? clamp(v, a, b) : d;
+S.preset = oneOf(S.preset, PRESETS.map(p => p.id), 'v8'); S.unit = oneOf(S.unit, ['mph', 'kmh'], 'mph'); S.src = oneOf(S.src, ['gps', 'demo'], 'gps');
+S.shift = oneOf(S.shift, Object.keys(SHIFT), 'normal'); S.scene = oneOf(S.scene, ['on', 'off'], 'on'); S.wake = oneOf(S.wake, ['on', 'off'], 'on');
+S.resp = num(S.resp, .2, 1, .6); S.vol = num(S.vol, 0, 1, .7); S.cal = num(S.cal, -10, 10, 0); S.best = S.best === null ? null : num(S.best, 0, 999, null);
+S.trip = (S.trip && typeof S.trip === 'object') ? { m: num(S.trip.m, 0, 1e8, 0), top: num(S.trip.top, 0, 200, 0) } : { m: 0, top: 0 };
+if (SAVED.scene === undefined && matchMedia('(prefers-reduced-motion: reduce)').matches) S.scene = 'off';
+const save = () => { try { localStorage.setItem('drivesound.v1', JSON.stringify(S)); } catch {} };
+const preset = () => PRESETS.find(p => p.id === S.preset) || PRESETS[0];
+const launchLabel = () => S.unit === 'mph' ? '0–60' : '0–100';
+const SCENE_OF = { v8:'road', flat6:'road', i4t:'road', jet:'grid', ship:'grid', ev:'road' };
+
+/* ---------- Speed model ---------------------------------------------- */
+const M = {
+  target:0,       /* m/s from GPS or demo */
+  speed:0,        /* smoothed m/s */
+  accel:0,        /* smoothed m/s² */
+  throttle:0, rpm:0, gear:0, shiftT:0, shiftDir:0,
+  t:performance.now(), gpsT:0, gpsOk:false, lastPos:null, auto:false, autoT:0, fixA:0, fixV:0,
+  armed:true, launchT:0, saveT:0,
+};
+
+function stepModel(now) {
+  const dt = clamp((now - M.t) / 1000, 0.001, 0.1); M.t = now;
+  const p = preset();
+
+  if (S.src === 'demo' && M.auto) {                           /* a scripted drive for the couch */
+    M.autoT += dt;
+    const t = M.autoT;
+    const kmh = 30 + 55 * (0.5 + 0.5 * Math.sin(t * .21)) + 40 * Math.max(0, Math.sin(t * .073)) * (0.5 + 0.5 * Math.sin(t * .9));
+    M.target = (t % 90 > 78 ? Math.max(0, (90 - t % 90 - 6) * 3) : kmh) / KMH;
+    $('demoSpeed').value = Math.round(M.target * (S.unit === 'mph' ? MPH : KMH));
+    $('demoVal').textContent = $('demoSpeed').value + ' ' + (S.unit === 'mph' ? 'mph' : 'km/h');
+  }
+  if (S.src === 'gps' && M.gpsOk) { const since = now - M.gpsT;
+    if (since < 1800) M.target = Math.max(0, M.target + M.fixA * dt);       /* between fixes: carry the trend on */
+    else if (since > 6000) M.target *= Math.pow(0.5, dt); }                 /* fix lost: coast down */
+
+  const k = 1 - Math.exp(-dt / lerp(1.6, .25, S.resp));
+  const prev = M.speed;
+  M.speed += (M.target - M.speed) * k;
+  const a = (M.speed - prev) / dt;
+  M.accel += (a - M.accel) * (1 - Math.exp(-dt / .35));
+
+  /* throttle: a guess from acceleration and speed */
+  let thr = 0.16 + M.accel * 0.42 + 0.14 * clamp(M.speed / 35, 0, 1);
+  if (M.accel < -0.5) thr = 0;                                  /* braking or lifting off: overrun */
+  if (M.speed < 0.4) thr = 0.04 + 0.03 * Math.sin(now / 350);   /* idle flutter */
+  if (M.shiftT > 0) thr = 0;                                     /* the clutch is in */
+  M.throttle += (clamp(thr, 0, 1) - M.throttle) * (1 - Math.exp(-dt / .18));
+
+  /* rpm and gears */
+  const kmh = M.speed * KMH;
+  let rpmTarget;
+  if (p.gears) {
+    const [up, down] = SHIFT[S.shift] || SHIFT.normal;
+    const inGear = g => p.idle + (kmh / GEAR_TOP_KMH[g]) * (p.redline - p.idle);
+    if (M.shiftT > 0) {
+      M.shiftT -= dt;
+      if (M.shiftT <= 0) { M.gear = clamp(M.gear + M.shiftDir, 0, GEAR_TOP_KMH.length - 1); M.shiftDir = 0; }
+    } else {
+      const r = inGear(M.gear);
+      if (r > p.redline * clamp(up + .2 * M.throttle, .55, .98) && M.gear < GEAR_TOP_KMH.length - 1) { M.shiftT = .22; M.shiftDir = 1; flashShift(M.gear + 2); }
+      else if (M.gear > 0 && r < p.idle + (p.redline - p.idle) * down && inGear(M.gear - 1) < p.redline * .9) { M.shiftT = .18; M.shiftDir = -1; }
+      if (kmh < 2 && M.gear > 0) { M.gear = 0; M.shiftT = 0; M.shiftDir = 0; }
+    }
+    rpmTarget = M.shiftT > 0 ? inGear(M.gear + M.shiftDir) * (M.shiftDir > 0 ? .96 : 1.06) : inGear(M.gear);
+    rpmTarget = Math.max(p.idle, Math.min(p.redline * 1.02, rpmTarget));
+    if (p.lump) rpmTarget += p.lump * 70 * (Math.sin(now * .011) + .6 * Math.sin(now * .027)) * clamp(1 - (M.rpm - p.idle) / 1500, 0, 1);   /* a lumpy idle */
+  } else {
+    rpmTarget = p.idle + clamp(kmh / p.top, 0, 1.05) * (p.redline - p.idle);
+  }
+  M.rpm += (rpmTarget - M.rpm) * (1 - Math.exp(-dt / (M.shiftT > 0 ? .08 : .14)));
+
+  /* the trip and the 0-60 (0-100 km/h in metric), timed on the raw speed, not the smoothed one */
+  if (running) {
+    S.trip.m += M.target * dt; if (M.target > S.trip.top) S.trip.top = M.target;
+    const goal = S.unit === 'mph' ? 60 / MPH : 100 / KMH;
+    if (M.target < .3) { M.armed = true; M.launchT = 0; }
+    else if (M.armed && !M.launchT) M.launchT = now;
+    else if (M.launchT && M.target >= goal) { const sec = (now - M.launchT) / 1000; M.armed = false; M.launchT = 0;
+      if (sec > 1.5 && sec < 60) { const best = S.best === null || sec < S.best; if (best) S.best = +sec.toFixed(2);
+        toast(`${launchLabel()} in ${sec.toFixed(1)} s${best ? ' · new best' : ''}`, 5000); } }
+    if (M.launchT && now - M.launchT > 60000) { M.launchT = 0; M.armed = false; }
+    if (now - M.saveT > 15000) { M.saveT = now; save(); }
+  }
+  return dt;
+}
+
+/* ---------- Audio engine ---------------------------------------------- */
+let AC = null, master = null, comp = null, engine = null, noiseBuf = null;
+
+function audioInit() {
+  if (AC) return;
+  AC = new (window.AudioContext || window.webkitAudioContext)();
+  comp = AC.createDynamicsCompressor();
+  comp.threshold.value = -6; comp.knee.value = 4; comp.ratio.value = 12; comp.attack.value = .002; comp.release.value = .2;   /* a safety limiter: the dynamics stay */
+  master = AC.createGain(); master.gain.value = S.vol;
+  comp.connect(master).connect(AC.destination);
+  const n = AC.sampleRate * 2, b = AC.createBuffer(1, n, AC.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  noiseBuf = b;
+}
+const shaperCurve = k => { const c = new Float32Array(1024); for (let i = 0; i < 1024; i++) { const x = i / 511.5 - 1; c[i] = Math.tanh(k * x) / Math.tanh(k); } return c; };
+
+class Engine {
+  constructor(p) {
+    this.p = p; const ac = AC, t = ac.currentTime;
+    this.out = ac.createGain(); this.out.gain.setValueAtTime(0, t); this.out.gain.linearRampToValueAtTime(1, t + .6);
+    this.out.connect(comp);
+    this.lp = ac.createBiquadFilter(); this.lp.type = 'lowpass'; this.lp.Q.value = .9; this.lp.connect(this.out);
+    this.body = ac.createGain(); this.body.gain.value = .9; this.body.connect(this.lp);
+    this.shaper = ac.createWaveShaper(); this.shaper.curve = shaperCurve(p.drive); this.shaper.oversample = '2x'; this.shaper.connect(this.body);
+    this.lim = ac.createGain(); this.lim.gain.value = 1; this.lim.connect(this.body);   /* the rev limiter's cut */
+    this.shaper.disconnect(); this.shaper.connect(this.lim);
+    this.lump = ac.createGain(); this.lump.gain.value = 1; this.lump.connect(this.shaper);
+    this.oscs = p.osc.map(([type, ratio, g, cents]) => {
+      const o = ac.createOscillator(), gn = ac.createGain();
+      o.type = type; o.detune.value = cents; gn.gain.value = g; o.connect(gn).connect(this.lump); o.start();
+      return { o, ratio };
+    });
+    /* idle lumpiness: an LFO at a fraction of the firing frequency */
+    this.lfo = ac.createOscillator(); this.lfo.type = 'sine'; this.lfoG = ac.createGain(); this.lfoG.gain.value = 0;
+    this.lfo.connect(this.lfoG).connect(this.lump.gain); this.lfo.start();
+    /* exhaust and intake noise */
+    this.noise = ac.createBufferSource(); this.noise.buffer = noiseBuf; this.noise.loop = true;
+    this.bp = ac.createBiquadFilter(); this.bp.type = 'bandpass'; this.bp.Q.value = .7;
+    this.noiseG = ac.createGain(); this.noiseG.gain.value = 0;
+    this.noise.connect(this.bp).connect(this.noiseG).connect(this.lp); this.noise.start();
+    /* whine: turbo, turbine or inverter */
+    if (p.whine) {
+      this.wh = ac.createOscillator(); this.wh.type = 'sine'; this.whG = ac.createGain(); this.whG.gain.value = 0;
+      this.wh2 = ac.createOscillator(); this.wh2.type = 'triangle'; this.wh2.detune.value = 1203; this.wh2G = ac.createGain(); this.wh2G.gain.value = 0;
+      this.wh.connect(this.whG).connect(this.out); this.wh2.connect(this.wh2G).connect(this.out); this.wh.start(); this.wh2.start();
+    }
+    if (p.vibrato) { this.vib = ac.createOscillator(); this.vib.frequency.value = 4.5; this.vibG = ac.createGain(); this.vibG.gain.value = 6;
+      this.vib.connect(this.vibG); this.oscs.forEach(x => this.vibG.connect(x.o.detune)); this.vib.start(); }
+    this.lastThr = 0; this.popT = 0; this.boT = 0; this.limK = 0;
+  }
+  update(rpm, thr, dt) {
+    const p = this.p, ac = AC, t = ac.currentTime, tc = .045;
+    const f0 = (rpm / 60) * (p.cyl / 2);
+    const n = clamp((rpm - p.idle) / (p.redline - p.idle), 0, 1.05);
+    for (const { o, ratio } of this.oscs) o.frequency.setTargetAtTime(f0 * ratio, t, tc);
+    this.lfo.frequency.setTargetAtTime(Math.max(2, f0 / 6), t, tc);
+    this.lfoG.gain.setTargetAtTime(p.lump * (1 - n) * (1 - thr * .5), t, .1);
+    const load = thr * .75 + n * .25;
+    this.lp.frequency.setTargetAtTime(p.lp[0] + p.lp[1] * load + p.lp[2] * n, t, .06);
+    const lvl = (.14 + .86 * Math.pow(clamp(thr * .65 + n * .35, 0, 1), 1.15)) * (p.vol || 1);   /* idle is quiet, full throttle is loud */
+    this.body.gain.setTargetAtTime(lvl, t, .08);
+    if (p.gears && n >= 1.0) { this.lim.gain.setTargetAtTime((this.limK++ & 1) ? .2 : 1, t, .008); }   /* bouncing off the limiter */
+    else if (this.lim.gain.value < 1) this.lim.gain.setTargetAtTime(1, t, .02);
+    this.bp.frequency.setTargetAtTime(p.noise[1] + (p.noise[2] - p.noise[1]) * load, t, .08);
+    this.noiseG.gain.setTargetAtTime(p.noise[0] * (.25 + .75 * load) * (0.5 + 0.5 * n), t, .08);
+    if (this.wh) {
+      const [a, b, g] = p.whine;
+      this.wh.frequency.setTargetAtTime(a + b * n, t, .12); this.wh2.frequency.setTargetAtTime((a + b * n) * .5, t, .12);
+      this.whG.gain.setTargetAtTime(g * (.15 + .85 * thr) * (.3 + .7 * n), t, .15);
+      this.wh2G.gain.setTargetAtTime(g * .35 * thr * n, t, .15);
+    }
+    /* overrun pops and the turbo's blow-off when the throttle is dropped high in the revs */
+    if (p.blowoff && this.lastThr - thr > .25 && n > .4 && t - this.boT > 1.2) { this.boT = t; this.blowoff(n); }
+    if (p.pops && thr < .12 && n > .35) { this.popT -= dt; if (this.popT <= 0) { this.pop(n); this.popT = .05 + Math.random() * .22 * (1.4 - n); } }
+    this.lastThr = lerp(this.lastThr, thr, .3);
+  }
+  pop(n) {
+    const ac = AC, t = ac.currentTime, s = ac.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+    const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 120 + Math.random() * 220; f.Q.value = 2;
+    const g = ac.createGain(); g.gain.setValueAtTime(.5 + .4 * n, t); g.gain.exponentialRampToValueAtTime(.001, t + .06 + Math.random() * .05);
+    s.connect(f).connect(g).connect(comp); s.start(t); s.stop(t + .15);
+  }
+  clunk() {
+    const ac = AC, t = ac.currentTime, s = ac.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+    const f = ac.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 420; f.Q.value = 1.5;
+    const g = ac.createGain(); g.gain.setValueAtTime(.22, t); g.gain.exponentialRampToValueAtTime(.001, t + .07);
+    s.connect(f).connect(g).connect(comp); s.start(t); s.stop(t + .1);
+  }
+  blowoff(n) {
+    const ac = AC, t = ac.currentTime, s = ac.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+    const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.4;
+    f.frequency.setValueAtTime(3500, t); f.frequency.exponentialRampToValueAtTime(900, t + .45);
+    const g = ac.createGain(); g.gain.setValueAtTime(.001, t); g.gain.exponentialRampToValueAtTime(.35 * n, t + .03); g.gain.exponentialRampToValueAtTime(.001, t + .5);
+    s.connect(f).connect(g).connect(comp); s.start(t); s.stop(t + .55);
+  }
+  dispose() {
+    const t = AC.currentTime; this.out.gain.setTargetAtTime(0, t, .12);
+    setTimeout(() => { try { this.oscs.forEach(x => x.o.stop()); this.lfo.stop(); this.noise.stop(); if (this.wh) { this.wh.stop(); this.wh2.stop(); } if (this.vib) this.vib.stop(); this.out.disconnect(); } catch {} }, 700);
+  }
+}
+function setEngine(id) {
+  S.preset = id; save();
+  document.documentElement.style.setProperty('--accent', preset().col);
+  document.documentElement.style.setProperty('--accent2', preset().col + 'cc');
+  document.documentElement.style.setProperty('--glow', preset().col + '66');
+  document.documentElement.style.setProperty('--tint', preset().col + '2e');
+  if (AC) { if (engine) engine.dispose(); engine = new Engine(preset()); }
+  M.gear = 0; M.shiftT = 0;
+  $('redArc').setAttribute('stroke-dasharray', `${(207 * (1 - 1 / 1.05)).toFixed(1)} 276`);
+  $('redArc').setAttribute('stroke-dashoffset', `${(-207 / 1.05).toFixed(1)}`);
+  renderPresets();
+}
+
+/* ---------- GPS ------------------------------------------------------- */
+let watchId = null;
+function gpsStart() {
+  if (!('geolocation' in navigator)) { gpsState('bad', 'No GPS in this browser'); return; }
+  if (watchId !== null) return;
+  gpsState('warn', 'Finding signal…');
+  watchId = navigator.geolocation.watchPosition(onPos, onGpsErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+}
+function gpsStop() { if (watchId !== null) navigator.geolocation.clearWatch(watchId); watchId = null; M.gpsOk = false; gpsState('', 'GPS off'); }
+function onPos(pos) {
+  const c = pos.coords, now = performance.now();
+  let v = (c.speed != null && c.speed >= 0 && isFinite(c.speed)) ? c.speed : null;
+  if (v === null && M.lastPos) {                                   /* no speed field: derive it from the last fix */
+    const dt = (pos.timestamp - M.lastPos.timestamp) / 1000;
+    if (dt > 0.4) v = haversine(M.lastPos.coords, c) / dt;
+  }
+  M.lastPos = pos;
+  if (v !== null) { v = v < 0.6 ? 0 : v * (1 + S.cal / 100); const dtF = (now - M.gpsT) / 1000;
+    M.fixA = (M.gpsOk && dtF > .3 && dtF < 3) ? clamp((v - M.fixV) / dtF, -5, 4) : 0; M.fixV = v;
+    M.target = v; M.gpsT = now; M.gpsOk = true;
+    gpsState(c.accuracy > 30 ? 'warn' : 'ok', c.accuracy > 30 ? 'GPS weak' : 'GPS live'); }
+}
+function onGpsErr(e) {
+  if (e.code === 1) { gpsState('bad', 'Location blocked'); toast('Location was blocked. Allow it in the browser, or switch to Demo in settings.'); }
+  else gpsState('warn', e.code === 3 ? 'Waiting for GPS…' : 'GPS unavailable');
+}
+function haversine(a, b) {
+  const R = 6371000, r = Math.PI / 180, dLat = (b.latitude - a.latitude) * r, dLon = (b.longitude - a.longitude) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.latitude * r) * Math.cos(b.latitude * r) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function gpsState(cls, text) { const el = $('gps'); el.className = 'pill ' + cls; $('gpsText').textContent = text; }
+
+/* ---------- Scenery ---------------------------------------------------- */
+const cv = $('scene'), cx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1, DPR_CAP = 2;
+const stars = Array.from({ length: 170 }, () => ({ x: Math.random(), y: Math.random() * .6, r: Math.random() * 1.4 + .3, a: Math.random(), d: .3 + Math.random() * .7 }));
+const hills = [0, 1, 2].map(l => Array.from({ length: 64 }, (_, i) => .35 + .65 * Math.abs(Math.sin(i * (1.7 + l * .9)) * Math.cos(i * .31 + l)) * (1 - l * .22)));
+const city = Array.from({ length: 70 }, () => ({ x: Math.random(), y: Math.random() * .012, w: 1 + Math.random() * 2, a: Math.random(), warm: Math.random() < .3 }));
+const dashes = Array.from({ length: 14 }, (_, i) => i / 14);
+const posts = Array.from({ length: 8 }, (_, i) => i / 8);
+const gridRows = Array.from({ length: 18 }, (_, i) => i / 18);
+let scroll = 0, dist = 0, hudHidden = false, meteor = null, meteorIn = 4;
+const hex = (c, a) => c + Math.round(clamp(a, 0, 1) * 255).toString(16).padStart(2, '0');
+const proj = (z, horizon, top, bot) => { const t = Math.pow(z, 2.2); return { y: horizon + (H - horizon) * t, hw: top + (bot - top) * t, s: t }; };
+
+/* Everything that does not move is built once, on a resize or a change of engine:
+   gradients, the moon, the sun and the lamp glow are sprites drawn with drawImage. */
+const GR = { key: '' };
+function sprite(w, h, draw) { const c = document.createElement('canvas'); c.width = Math.ceil(w * DPR); c.height = Math.ceil(h * DPR); const g = c.getContext('2d'); g.scale(DPR, DPR); draw(g, w, h); return c; }
+function buildStatic(col, kind) {
+  const key = [W, H, col, kind].join('|'); if (GR.key === key) return; GR.key = key;
+  const hz = H * .56; GR.hz = hz;
+  const lg = (y0, y1, stops) => { const g = cx.createLinearGradient(0, y0, 0, y1); stops.forEach(([o, c]) => g.addColorStop(o, c)); return g; };
+  GR.sky = lg(0, hz, kind === 'grid' ? [[0, '#06030f'], [1, '#17093a']] : [[0, '#05070d'], [1, '#0d1220']]);
+  const neb = cx.createLinearGradient(0, hz * .2, W, hz * .9); neb.addColorStop(0, hex(col, 0)); neb.addColorStop(.5, hex(col, kind === 'grid' ? .07 : .04)); neb.addColorStop(1, hex(col, 0)); GR.neb = neb;
+  GR.ground = lg(hz, H, kind === 'grid' ? [[0, '#0a0418'], [1, '#120a2a']] : [[0, '#0b0e15'], [1, '#141a26']]);
+  GR.road = lg(hz, H, [[0, '#171c28'], [1, '#222a3a']]);
+  GR.edge = lg(hz, H, [[0, 'rgba(255,255,255,.3)'], [1, hex(col, .9)]]);
+  GR.cols = lg(hz, H, [[0, hex(col, .05)], [1, hex(col, .55)]]);
+  GR.hzline = lg(hz - 6, hz + 10, [[0, hex(col, 0)], [.5, hex(col, .8)], [1, hex(col, 0)]]);
+  const hl = cx.createRadialGradient(W / 2, H * 1.05, 0, W / 2, H * 1.05, H * .7); hl.addColorStop(0, 'rgba(255,240,210,.22)'); hl.addColorStop(1, 'rgba(255,240,210,0)'); GR.head = hl;
+  const vg = cx.createRadialGradient(W / 2, H * .5, H * .3, W / 2, H * .5, Math.max(W, H) * .8); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.65)'); GR.vig = vg;
+  /* the horizon glow, squashed */
+  GR.glow = sprite(W, W * .6 * .4, (g, w, h) => { g.save(); g.translate(w / 2, h); g.scale(1, .4); const r = g.createRadialGradient(0, 0, 0, 0, 0, w * .6);
+    r.addColorStop(0, hex(col, .3)); r.addColorStop(.5, hex(col, .09)); r.addColorStop(1, hex(col, 0)); g.fillStyle = r; g.fillRect(-w / 2, -w * .6, w, w * .6); g.restore(); });
+  /* a lamp's glow, drawn scaled */
+  GR.lamp = sprite(64, 64, (g) => { const r = g.createRadialGradient(32, 32, 0, 32, 32, 32); r.addColorStop(0, hex(col, .55)); r.addColorStop(.4, hex(col, .18)); r.addColorStop(1, hex(col, 0)); g.fillStyle = r; g.fillRect(0, 0, 64, 64); });
+  if (kind === 'grid') {
+    const R = Math.min(W, H) * .16; GR.sunR = R; GR.sunX = W > H ? W * .72 : W / 2; GR.sunY = hz - R * .2;
+    GR.sun = sprite(R * 5.2, R * 5.2, (g, w) => { const c = w / 2;
+      const halo = g.createRadialGradient(c, c, R * .6, c, c, R * 2.6); halo.addColorStop(0, hex(col, .35)); halo.addColorStop(1, hex(col, 0)); g.fillStyle = halo; g.fillRect(0, 0, w, w);
+      const sun = g.createLinearGradient(0, c - R, 0, c + R); sun.addColorStop(0, '#fff2d0'); sun.addColorStop(.45, col); sun.addColorStop(1, hex(col, .5)); g.fillStyle = sun; g.beginPath(); g.arc(c, c, R, 0, 7); g.fill(); });
+  } else {
+    const R = Math.min(W, H) * .055; GR.moonR = R;
+    GR.moon = sprite(R * 8, R * 8, (g, w) => { const c = w / 2;
+      const halo = g.createRadialGradient(c, c, R, c, c, R * 4); halo.addColorStop(0, 'rgba(220,228,255,.16)'); halo.addColorStop(1, 'rgba(220,228,255,0)'); g.fillStyle = halo; g.fillRect(0, 0, w, w);
+      const moon = g.createRadialGradient(c - R * .3, c - R * .3, R * .1, c, c, R); moon.addColorStop(0, '#f4f6ff'); moon.addColorStop(1, '#b9c2dc'); g.fillStyle = moon; g.beginPath(); g.arc(c, c, R, 0, 7); g.fill();
+      g.fillStyle = 'rgba(120,130,160,.35)'; for (const [ox, oy, r] of [[.3, .2, .22], [-.35, .1, .15], [.05, -.4, .12], [-.1, .45, .1]]) { g.beginPath(); g.arc(c + ox * R, c + oy * R, r * R, 0, 7); g.fill(); } });
+  }
+}
+function resize() {
+  DPR = Math.min(DPR_CAP, window.devicePixelRatio || 1); W = innerWidth; H = innerHeight;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); cx.setTransform(DPR, 0, 0, DPR, 0, 0); GR.key = '';
+}
+addEventListener('resize', resize); resize();
+
+function drawSky(dt, horizon, col, kind) {
+  cx.fillStyle = GR.sky; cx.fillRect(0, 0, W, horizon + 2);
+  cx.fillStyle = GR.neb; cx.fillRect(0, 0, W, horizon);
+  cx.fillStyle = '#e4eaff';
+  for (const s of stars) { const x = (((s.x - scroll * .00002 * s.d) % 1) + 1) % 1 * W, r = s.r;
+    cx.globalAlpha = .3 + .5 * Math.abs(Math.sin(s.a * 6 + dist * .02 + r)); cx.fillRect(x - r, s.y * horizon - r, r * 2, r * 2); }
+  cx.globalAlpha = 1;
+  /* a shooting star now and then */
+  meteorIn -= dt;
+  if (!meteor && meteorIn <= 0) { meteor = { x: W * (.1 + Math.random() * .8), y: horizon * Math.random() * .4, vx: -(300 + Math.random() * 400), vy: 160 + Math.random() * 120, life: .9 }; meteorIn = 5 + Math.random() * 9; }
+  if (meteor) { meteor.life -= dt; meteor.x += meteor.vx * dt; meteor.y += meteor.vy * dt;
+    const L = 90, nl = Math.hypot(meteor.vx, meteor.vy), tx = meteor.x - meteor.vx / nl * L, ty = meteor.y - meteor.vy / nl * L;
+    const g = cx.createLinearGradient(tx, ty, meteor.x, meteor.y); g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, `rgba(255,255,255,${clamp(meteor.life, 0, 1) * .9})`);
+    cx.strokeStyle = g; cx.lineWidth = 1.6; cx.beginPath(); cx.moveTo(tx, ty); cx.lineTo(meteor.x, meteor.y); cx.stroke();
+    if (meteor.life <= 0) meteor = null; }
+  if (kind === 'grid') {
+    const R = GR.sunR, sx = GR.sunX, sy = GR.sunY, w = R * 5.2;
+    cx.save(); cx.beginPath(); cx.rect(0, 0, W, horizon); cx.clip();
+    cx.drawImage(GR.sun, sx - w / 2, sy - w / 2, w, w);
+    cx.fillStyle = '#17093a';   /* scan lines across the sun's lower half */
+    for (let i = 0; i < 7; i++) { const y = sy + R * (.05 + i * .13) + ((dist * .3) % (R * .13)); cx.fillRect(sx - R, y, R * 2, 1 + i * 1.3); }
+    cx.restore();
+  } else {
+    const R = GR.moonR, mx = W * .8 - ((scroll * .004) % (W * .2)), my = horizon * .3;
+    cx.drawImage(GR.moon, mx - R * 4, my - R * 4, R * 8, R * 8);
+    for (const c of city) { const x = (((c.x - scroll * .00012) % 1) + 1) % 1 * W; cx.globalAlpha = .25 + .6 * Math.abs(Math.sin(c.a * 9 + dist * .05)); cx.fillStyle = c.warm ? '#ffd9a0' : '#ffb270'; cx.fillRect(x, horizon - 2 - c.y * H, c.w, 1.5); }
+    cx.globalAlpha = 1;
+  }
+  cx.drawImage(GR.glow, 0, horizon - W * .24, W, W * .24);
+}
+
+function drawRoad(horizon, col) {
+  hills.forEach((h, l) => {
+    const off = scroll * (.5 + l * .45), amp = H * (.1 - l * .024), base = horizon + 2 - l * 3;
+    cx.fillStyle = ['#0a0e18', '#0c1120', '#0f1628'][l]; cx.beginPath(); cx.moveTo(0, horizon + 2);
+    for (let i = 0; i <= 48; i++) { const x = (i / 48) * W, u = ((x + off) / W) * 14, i0 = ((Math.floor(u) % 64) + 64) % 64, f = u - Math.floor(u);
+      cx.lineTo(x, base - lerp(h[i0], h[(i0 + 1) % 64], f) * amp); }
+    cx.lineTo(W, horizon + 2); cx.closePath(); cx.fill();
+  });
+  cx.fillStyle = GR.ground; cx.fillRect(0, horizon, W, H - horizon);
+  const cxm = W / 2, roadTop = 12, roadBot = W * .78, P = z => proj(z, horizon, roadTop, roadBot);
+  const roadPath = () => { cx.beginPath(); cx.moveTo(cxm - roadTop, horizon); cx.lineTo(cxm + roadTop, horizon); cx.lineTo(cxm + roadBot, H); cx.lineTo(cxm - roadBot, H); cx.closePath(); };
+  roadPath(); cx.fillStyle = GR.road; cx.fill();
+  cx.globalAlpha = .6 + .4 * M.throttle; cx.fillStyle = GR.head; cx.fill(); cx.globalAlpha = 1;   /* headlights on the tarmac */
+  const phase = (dist * .035) % 1;
+  cx.fillStyle = '#e9d27a';
+  for (const d of dashes) { const z = ((d + phase) % 1), a = P(z), b = P(Math.min(1, z + .028)); if (b.y <= a.y) continue;
+    cx.globalAlpha = .25 + .75 * z; cx.fillRect(cxm - 1.5 - a.s * 3, a.y, 3 + a.s * 6, b.y - a.y); }
+  cx.globalAlpha = 1;
+  cx.strokeStyle = GR.edge; cx.lineWidth = 2.5; cx.beginPath();
+  cx.moveTo(cxm - roadTop, horizon); cx.lineTo(cxm - roadBot, H); cx.moveTo(cxm + roadTop, horizon); cx.lineTo(cxm + roadBot, H); cx.stroke();
+  const rphase = (dist * .05) % 1; cx.fillStyle = '#fff';
+  for (let i = 0; i < 12; i++) { const z = (i / 12 + rphase) % 1, a = P(z); cx.globalAlpha = .2 + .8 * z;
+    cx.fillRect(cxm - a.hw - 2 - 2 * a.s, a.y - 1, 2 + 3 * a.s, 1.5 + 2 * a.s); cx.fillRect(cxm + a.hw, a.y - 1, 2 + 3 * a.s, 1.5 + 2 * a.s); }
+  cx.globalAlpha = 1;
+  const pphase = (dist * .02) % 1;
+  for (const p0 of posts) { const z = (p0 + pphase) % 1, a = P(z); const hgt = 4 + 170 * a.s, x1 = cxm - a.hw - 24 - 60 * a.s, x2 = cxm + a.hw + 24 + 60 * a.s, gr = 12 + 34 * a.s, y = a.y - hgt;
+    cx.globalAlpha = .2 + .8 * z; cx.fillStyle = '#2a3142';
+    cx.fillRect(x1 - 1 - a.s, y, 2 + 2 * a.s, hgt); cx.fillRect(x2 - 1 - a.s, y, 2 + 2 * a.s, hgt);
+    cx.drawImage(GR.lamp, x1 - gr, y - gr, gr * 2, gr * 2); cx.drawImage(GR.lamp, x2 - gr, y - gr, gr * 2, gr * 2);
+    cx.fillStyle = col; cx.fillRect(x1 - 2 - 4 * a.s, y - 2 - 4 * a.s, 4 + 8 * a.s, 4 + 8 * a.s); cx.fillRect(x2 - 2 - 4 * a.s, y - 2 - 4 * a.s, 4 + 8 * a.s, 4 + 8 * a.s); }
+  cx.globalAlpha = 1;
+}
+
+function drawGrid(horizon, col) {
+  cx.fillStyle = GR.ground; cx.fillRect(0, horizon, W, H - horizon);
+  const cxm = W / 2, phase = (dist * .03) % 1;
+  cx.lineCap = 'round';
+  for (const r of gridRows) { const z = (r + phase) % 1, t = Math.pow(z, 2.4), y = horizon + (H - horizon) * t;
+    cx.strokeStyle = hex(col, .12 + .5 * z); cx.lineWidth = 1 + 2.5 * t; cx.beginPath(); cx.moveTo(0, y); cx.lineTo(W, y); cx.stroke(); }
+  cx.strokeStyle = GR.cols; cx.lineWidth = 1.4; cx.beginPath();
+  for (let i = -14; i <= 14; i++) { cx.moveTo(cxm, horizon); cx.lineTo(cxm + i * W * .11, H); }
+  cx.stroke();
+  cx.fillStyle = GR.hzline; cx.fillRect(0, horizon - 6, W, 16);
+  const pphase = (dist * .02) % 1;
+  for (const p0 of posts) { const z = (p0 + pphase) % 1, t = Math.pow(z, 2.2), y = horizon + (H - horizon) * t, hgt = 6 + 220 * t, x1 = cxm - 30 - W * .55 * t, x2 = cxm + 30 + W * .55 * t, r = 1.5 + 3 * t;
+    cx.globalAlpha = .15 + .85 * z; cx.strokeStyle = hex(col, .9); cx.lineWidth = 1 + 2 * t;
+    cx.beginPath(); cx.moveTo(x1, y); cx.lineTo(x1, y - hgt); cx.moveTo(x2, y); cx.lineTo(x2, y - hgt); cx.stroke();
+    cx.fillStyle = '#fff'; cx.fillRect(x1 - r, y - hgt - r, r * 2, r * 2); cx.fillRect(x2 - r, y - hgt - r, r * 2, r * 2); }
+  cx.globalAlpha = 1;
+}
+
+function drawScene(dt) {
+  const v = M.speed, kmh = v * KMH, p = preset(), col = p.col, kind = SCENE_OF[p.id] || 'road';
+  buildStatic(col, kind);
+  scroll += v * dt; dist += v * dt;
+  const fast = clamp((kmh - 80) / 120, 0, 1), horizon = GR.hz;
+  cx.save();
+  cx.translate(Math.sin(dist * .012) * 3 * fast, Math.sin(dist * .07) * 1.5 * fast + 6 * fast);   /* a little sway at speed */
+  drawSky(dt, horizon, col, kind);
+  if (kind === 'grid') drawGrid(horizon, col); else drawRoad(horizon, col);
+  if (fast > 0) { cx.strokeStyle = `rgba(255,255,255,${.14 * fast})`; cx.lineWidth = 1.5; const cxm = W / 2; cx.beginPath();
+    for (let i = 0; i < 28; i++) { const ang = (i / 28) * Math.PI * 2 + dist * .01, r0 = Math.max(W, H) * (.26 + .3 * ((i * .37 + dist * .3) % 1)), r1 = r0 + 110 * fast;
+      cx.moveTo(cxm + Math.cos(ang) * r0, horizon + Math.sin(ang) * r0); cx.lineTo(cxm + Math.cos(ang) * r1, horizon + Math.sin(ang) * r1); }
+    cx.stroke(); }
+  cx.restore();
+  cx.fillStyle = GR.vig; cx.fillRect(0, 0, W, H);
+  if (M.throttle > .6) { cx.fillStyle = hex(col, (M.throttle - .6) * .12); cx.fillRect(0, 0, W, H); }
+}
+
+/* ---------- HUD ---------------------------------------------------- */
+const TXT = {}; function setText(id, v) { v = String(v); if (TXT[id] !== v) { TXT[id] = v; $(id).textContent = v; } }
+let lastUi = 0;
+function drawHud(now) {
+  if (now - lastUi < 50) return; lastUi = now;
+  const p = preset(), u = S.unit === 'mph' ? MPH : KMH;
+  setText('speed', Math.round(M.speed * u)); setText('rpm', Math.round(M.rpm / 10) * 10);
+  const n = clamp(M.rpm / (p.redline * 1.05), 0, 1);
+  $('rpmArc').setAttribute('stroke-dasharray', `${(207 * n).toFixed(1)} 276`);
+  $('rpmHalo').setAttribute('stroke-dasharray', `${(207 * n).toFixed(1)} 276`);
+  $('rpmArc').style.stroke = $('rpmHalo').style.stroke = n > .93 ? 'var(--danger)' : '';
+  const gl = p.gears ? (M.speed < .4 ? 'N' : String(M.gear + 1)) : 'D';
+  if (gl !== drawHud.gear) { drawHud.gear = gl; $('gearN').textContent = gl; }
+  $('thr').style.height = Math.round(M.throttle * 100) + '%';
+  const lit = Math.round(clamp((n - .42) / .53, 0, 1) * 10), leds = $('leds');
+  if (lit !== drawHud.lit) { drawHud.lit = lit; leds.querySelectorAll('i').forEach((el, i) => el.classList.toggle('on', i < lit)); }
+  leds.classList.toggle('blink', n > .96);
+  if (hudHidden) setText('miniN', $('speed').textContent);
+}
+let shiftTO = 0;
+function flashShift(g) { const el = $('shiftLbl'); el.textContent = 'Shift · ' + g; el.classList.add('show'); clearTimeout(shiftTO); shiftTO = setTimeout(() => el.classList.remove('show'), 450);
+  const f = $('flash'); f.classList.add('on'); setTimeout(() => f.classList.remove('on'), 60); if (engine) engine.clunk(); }
+function toast(msg, ms = 3800) { const el = $('toast'); el.textContent = msg; el.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), ms); }
+
+/* ---------- Loops ------------------------------------------------- */
+let running = false, audioTimer = 0;
+function audioTick() { if (!AC || !engine) return; const dt = stepModel(performance.now()); engine.update(M.rpm, M.throttle, dt); }
+let lastFrame = 0, slowT = 0;
+function frame(now) {
+  if (!running) return;
+  const dt = clamp((now - lastFrame) / 1000, 0, .1); lastFrame = now;
+  if (S.scene === 'on' && document.visibilityState === 'visible') {   /* a screen that cannot keep 25 fps for 3 s steps down */
+    slowT = dt > .04 ? slowT + dt : Math.max(0, slowT - dt * .5);
+    if (slowT > 3) { slowT = 0;
+      if (DPR_CAP > 1) { DPR_CAP = 1; resize(); }
+      else { S.scene = 'off'; save(); renderSegs(); toast('Scenery turned off to keep the sound smooth. Settings turns it back on.'); } } }
+  if (S.scene === 'on') drawScene(dt); else { cx.fillStyle = '#07090f'; cx.fillRect(0, 0, W, H); }
+  drawHud(now);
+  requestAnimationFrame(frame);
+}
+async function start() {
+  audioInit();
+  try { await AC.resume(); } catch {}
+  clearInterval(prevIv);
+  if (!engine) engine = new Engine(preset());
+  running = true; lastFrame = performance.now(); M.t = lastFrame;
+  clearInterval(audioTimer); audioTimer = setInterval(audioTick, 33);   /* keeps running when the tab is hidden */
+  requestAnimationFrame(frame);
+  $('start').classList.add('gone'); $('hud').classList.remove('hidden');
+  applySource(); wakeLock();
+  toast(S.src === 'gps' ? 'Allow location when the browser asks. Tap the scene to hide the controls.' : 'Demo mode: drag the slider or press Auto drive.');
+}
+let wl = null;
+async function wakeLock() { try { if (S.wake === 'on' && 'wakeLock' in navigator) wl = await navigator.wakeLock.request('screen'); else if (wl) { await wl.release(); wl = null; } } catch {} }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') save(); if (document.visibilityState === 'visible') { if (AC && AC.state !== 'running') AC.resume().catch(() => {}); wakeLock(); } });
+
+/* ---------- Controls ---------------------------------------------- */
+function renderPresets() {
+  $('presets').innerHTML = PRESETS.map(p => `<button class="preset${p.id === S.preset ? ' on' : ''}" data-id="${p.id}"><b><i class="sw" style="background:${p.col};box-shadow:0 0 8px ${p.col}"></i>${p.name}</b><span>${p.desc}</span></button>`).join('');
+  $('choices').innerHTML = PRESETS.map(p => `<button class="choice${p.id === S.preset ? ' on' : ''}" data-id="${p.id}"><i class="sw" style="background:${p.col};color:${p.col}"></i><div><b>${p.name}</b><span>${p.desc}</span></div></button>`).join('');
+  $('brandDot').style.background = preset().col; $('brandDot').style.boxShadow = '0 0 14px ' + preset().col;
+}
+$('presets').addEventListener('click', e => { const b = e.target.closest('[data-id]'); if (b) setEngine(b.dataset.id); });
+$('choices').addEventListener('click', e => { const b = e.target.closest('[data-id]'); if (b) { setEngine(b.dataset.id); previewRev(); } });
+let prevIv = 0;
+async function previewRev() {   /* a short rev of the chosen engine, before Start */
+  if (running) return; audioInit(); try { await AC.resume(); } catch {} if (running) return;
+  if (!engine) engine = new Engine(preset());
+  clearInterval(prevIv); let t = 0;
+  prevIv = setInterval(() => { if (running) { clearInterval(prevIv); return; } t += .033; const p = preset(), n = t < .9 ? t / .9 : Math.max(0, 1 - (t - .9) / .8);
+    engine.update(p.idle + n * .8 * (p.redline - p.idle), t < .9 ? .9 : .05, .033);
+    if (t > 2.4) { clearInterval(prevIv); engine.dispose(); engine = null; } }, 33);
+}
+$('go').addEventListener('click', start);
+$('vol').value = S.vol;
+$('vol').addEventListener('input', e => { S.vol = +e.target.value; save(); if (master) master.gain.setTargetAtTime(S.vol, AC.currentTime, .05); });
+$('unitBtn').addEventListener('click', () => setUnit(S.unit === 'mph' ? 'kmh' : 'mph'));
+function setUnit(u) { S.unit = u; save(); const l = u === 'mph' ? 'mph' : 'km/h'; $('unitBtn').textContent = l; $('unitLbl').textContent = l;
+  $('demoSpeed').max = u === 'mph' ? 160 : 260; $('demoSpeed').value = Math.round(M.target * (u === 'mph' ? MPH : KMH)); $('demoVal').textContent = $('demoSpeed').value + ' ' + l; renderSegs(); }
+$('demoSpeed').addEventListener('input', e => { M.auto = false; $('autoBtn').classList.remove('on'); M.target = +e.target.value / (S.unit === 'mph' ? MPH : KMH); $('demoVal').textContent = e.target.value + ' ' + (S.unit === 'mph' ? 'mph' : 'km/h'); });
+$('autoBtn').addEventListener('click', () => { M.auto = !M.auto; M.autoT = 0; $('autoBtn').classList.toggle('on', M.auto); });
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'Escape') $('sheet').classList.remove('open');
+  if (e.key === ' ' && running) { e.preventDefault(); toggleHud(); }
+  if (/^[1-6]$/.test(e.key) && PRESETS[+e.key - 1]) setEngine(PRESETS[+e.key - 1].id);
+  if (S.src !== 'demo') return; const el = $('demoSpeed'); if (e.key === 'ArrowUp') { el.value = +el.value + 3; el.dispatchEvent(new Event('input')); } if (e.key === 'ArrowDown') { el.value = +el.value - 3; el.dispatchEvent(new Event('input')); } });
+function applySource() { if (S.src === 'gps') { $('demo').classList.remove('show'); M.auto = false; $('autoBtn').classList.remove('on'); if (running) gpsStart(); } else { gpsStop(); $('demo').classList.add('show'); gpsState('warn', 'Demo'); } }
+
+/* settings sheet */
+$('setBtn').addEventListener('click', () => { $('sheet').classList.add('open'); renderSegs(); renderCal(); renderTrip(); });
+$('closeSheet').addEventListener('click', () => $('sheet').classList.remove('open'));
+$('sheet').addEventListener('click', e => { if (e.target === $('sheet')) $('sheet').classList.remove('open'); });
+const SEGS = { srcSeg: 'src', unitSeg: 'unit', shiftSeg: 'shift', sceneSeg: 'scene', wakeSeg: 'wake' };
+for (const [id, key] of Object.entries(SEGS)) $(id).addEventListener('click', e => { const b = e.target.closest('[data-v]'); if (!b) return;
+  S[key] = b.dataset.v; save(); if (key === 'unit') setUnit(S.unit); if (key === 'src') applySource(); if (key === 'wake') wakeLock(); renderSegs(); });
+function renderSegs() { for (const [id, key] of Object.entries(SEGS)) $(id).querySelectorAll('[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === S[key])); }
+$('resp').value = S.resp; $('resp').addEventListener('input', e => { S.resp = +e.target.value; save(); });
+$('cal').value = S.cal; $('cal').addEventListener('input', e => { S.cal = +e.target.value; save(); renderCal(); });
+function renderCal() { $('calVal').textContent = (S.cal > 0 ? '+' : '') + S.cal + '%'; }
+function renderTrip() { const mi = S.unit === 'mph', d = S.trip.m / (mi ? 1609.344 : 1000), top = Math.round(S.trip.top * (mi ? MPH : KMH));
+  $('tripLine').textContent = `${d < 10 ? d.toFixed(1) : Math.round(d)} ${mi ? 'mi' : 'km'} · top ${top} ${mi ? 'mph' : 'km/h'} · ${launchLabel()} ${S.best === null ? '—' : S.best.toFixed(1) + ' s'}`; }
+$('tripReset').addEventListener('click', () => { S.trip = { m: 0, top: 0 }; S.best = null; save(); renderTrip(); });
+
+/* tap the scene to hide or show the controls */
+let downAt = 0;
+cv.addEventListener('pointerdown', () => { downAt = performance.now(); });
+function toggleHud() { hudHidden = !hudHidden; $('hud').classList.toggle('hidden', hudHidden); $('mini').classList.toggle('show', hudHidden); $('miniU').textContent = S.unit === 'mph' ? 'mph' : 'km/h'; }
+cv.addEventListener('pointerup', () => { if (performance.now() - downAt < 300 && running) toggleHud(); });
+addEventListener('error', e => toast('Something went wrong: ' + (e.message || 'unknown error')));
+
+$('leds').innerHTML = Array.from({ length: 10 }, (_, i) => `<i class="${i < 4 ? 'g' : i < 7 ? 'a' : 'r'}"></i>`).join('');
+$('ticks').innerHTML = Array.from({ length: 11 }, (_, i) => { const a = i * 27 * Math.PI / 180, r1 = i % 5 === 0 ? 34 : 36.5, r2 = 39;
+  return `<line class="tick${i >= 10 ? ' r' : ''}" x1="${(50 + r1 * Math.cos(a)).toFixed(2)}" y1="${(50 + r1 * Math.sin(a)).toFixed(2)}" x2="${(50 + r2 * Math.cos(a)).toFixed(2)}" y2="${(50 + r2 * Math.sin(a)).toFixed(2)}"/>`; }).join('');
+setEngine(S.preset); setUnit(S.unit); renderSegs();
+</script>
+</body>
+</html>
