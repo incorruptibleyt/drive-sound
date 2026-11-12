@@ -287,15 +287,15 @@ const PRESETS = [
   { id:'v8', name:'V8 Muscle', desc:'Deep, lumpy, loud', col:'#ff7a1a', cyl:8, idle:750, redline:6200, gears:true,
     osc:[['sawtooth',1,.55,0],['sawtooth',1,.30,9],['square',.5,.30,0],['sine',.5,.45,0],['sawtooth',2,.16,0],['sawtooth',3,.07,0]],
     drive:3.2, lp:[220,2600,1400], noise:[.22,900,2200], lump:.35, whine:null, pops:true,
-    comb:{ banks:[[0,180,450,630],[90,270,360,540]], pipe:[.0050,.52], muff:[.0115,.42], lp:[260,2400,1200], drive:2.2, gain:1.6, out:.9, intake:.10, mech:.5, rough:.35, nzDecay:.9985, popP:.18, mix:1 } },
+    comb:{ banks:[[0,180,450,630],[90,270,360,540]], pipe:[.0050,.52], muff:[.0115,.42], lp:[260,2400,1200], drive:2.2, gain:1.6, out:.9, intake:.10, mech:.5, rough:.35, nzDecay:.9985, popP:.18, mix:1, idleRough:.9, missP:.05, jit:1.6 } },
   { id:'flat6', name:'Flat-6 Sport', desc:'Raspy, high-revving', col:'#ffd23f', cyl:6, idle:850, redline:8200, gears:true,
     osc:[['sawtooth',1,.48,0],['sawtooth',1,.28,-11],['square',2,.22,0],['sawtooth',3,.16,0],['sine',.5,.26,0],['sawtooth',4,.09,0]],
     drive:2.3, lp:[380,3600,2200], noise:[.18,1400,3200], lump:.18, whine:null, pops:true, vol:1.45,
-    comb:{ banks:[[0,240,480],[120,360,600]], pipe:[.0036,.5], muff:[.0082,.38], lp:[420,3400,2000], drive:1.8, gain:1.7, out:.9, intake:.14, mech:.6, rough:.3, nzDecay:.998, popP:.12, mix:1 } },
+    comb:{ banks:[[0,240,480],[120,360,600]], pipe:[.0036,.5], muff:[.0082,.38], lp:[420,3400,2000], drive:1.8, gain:1.7, out:.9, intake:.14, mech:.6, rough:.3, nzDecay:.998, popP:.12, mix:1, idleRough:.55, missP:.025, jit:.9 } },
   { id:'i4t', name:'Inline-4 Turbo', desc:'Spool, whistle, blow-off', col:'#4dd2ff', cyl:4, idle:900, redline:7200, gears:true,
     osc:[['sawtooth',1,.42,0],['square',1,.26,0],['sawtooth',2,.36,6],['sawtooth',3,.16,0],['sine',.5,.22,0]],
     drive:2.6, lp:[300,3000,1800], noise:[.16,1200,2600], lump:.22, whine:[700,5200,.11,'rpm'], pops:true, blowoff:true, vol:1.15,
-    comb:{ banks:[[0,180,360,540]], pipe:[.0042,.5], muff:[.0095,.4], lp:[340,3000,1800], drive:2.0, gain:2.2, out:.9, intake:.16, mech:.6, rough:.3, nzDecay:.998, popP:.15, mix:1 } },
+    comb:{ banks:[[0,180,360,540]], pipe:[.0042,.5], muff:[.0095,.4], lp:[340,3000,1800], drive:2.0, gain:2.2, out:.9, intake:.16, mech:.6, rough:.3, nzDecay:.998, popP:.15, mix:1, idleRough:.7, missP:.04, jit:1.2 } },
   { id:'jet', name:'Jet Turbine', desc:'Spooling turbofan', col:'#b48bff', cyl:2, idle:1500, redline:12000, gears:false, top:260,
     osc:[['triangle',1,.30,0],['sine',2,.26,0],['sawtooth',3,.09,0],['sine',4.02,.14,0],['sine',6,.08,0]],
     drive:1.3, lp:[800,5000,4000], noise:[.55,900,4500], lump:0, whine:[380,3400,.26,'rpm'], pops:false, vol:1.8 },
@@ -331,7 +331,7 @@ const M = {
   accel:0,        /* smoothed m/s² */
   throttle:0, rpm:0, gear:0, shiftT:0, shiftDir:0,
   t:performance.now(), gpsT:0, gpsOk:false, lastPos:null, auto:false, autoT:0, fixA:0, fixV:0,
-  armed:true, launchT:0, saveT:0, rev:0, freeRpm:0, offline:false, gpsLost:false,
+  armed:true, launchT:0, saveT:0, rev:0, freeRpm:0, offline:false, gpsLost:false, fixes:[], lastA:0, vHist:[], cruise:false, posMode:false,
 };
 
 function stepModel(now) {
@@ -347,24 +347,29 @@ function stepModel(now) {
     $('demoVal').textContent = $('demoSpeed').value + ' ' + (S.unit === 'mph' ? 'mph' : 'km/h');
   }
   if (S.src === 'gps' && M.gpsOk) { const since = now - M.gpsT;
-    if (since < 1800) M.target = Math.max(0, M.target + M.fixA * dt);       /* between fixes: carry the trend on */
+    if (since < 1500) M.target = Math.max(0, M.target + M.fixA * dt);       /* between fixes: carry the trend on */
     else if (since > 6000) M.target *= Math.pow(0.5, dt);                   /* fix lost: coast down */
     if (since > 4000 && !M.gpsLost) { M.gpsLost = true; gpsState('warn', 'GPS lost…'); } }
 
-  const k = 1 - Math.exp(-dt / lerp(1.6, .25, S.resp));
+  /* a small gap between the target and the speed is jitter: smooth it hard; a big one is a real change: follow it */
+  const steady = S.src === 'gps' && M.cruise;
+  const k = 1 - Math.exp(-dt / (steady ? 1.4 : lerp(1.2, .3, S.resp)));
   const prev = M.speed;
   M.speed += (M.target - M.speed) * k;
   const a = (M.speed - prev) / dt;
-  M.accel += (a - M.accel) * (1 - Math.exp(-dt / .35));
+  M.accel += (a - M.accel) * (1 - Math.exp(-dt / .45));
 
   /* throttle: a guess from acceleration and speed */
-  let thr = 0.16 + M.accel * 0.42 + 0.14 * clamp(M.speed / 35, 0, 1);
-  if (M.accel < -0.5) thr = 0;                                  /* braking or lifting off: overrun */
+  /* holding a speed takes a steady throttle; only a clear change moves it, and only a clear deceleration lifts off */
+  const cruise = 0.12 + 0.28 * clamp(M.speed / 35, 0, 1), dead = .3;
+  const aEff = Math.abs(M.accel) < dead ? 0 : M.accel - Math.sign(M.accel) * dead;
+  let thr = cruise + aEff * 0.45;
+  if (aEff < -0.45) thr = 0;                                    /* braking or lifting off: overrun */
   if (M.speed < 0.4) thr = 0.04 + 0.03 * Math.sin(now / 350);   /* idle flutter */
   const stopped = M.speed * KMH < 2;
   if (stopped && (M.rev || M.freeRpm > p.idle + 50)) thr = M.rev ? 1 : 0;   /* a free rev in neutral: throttle on the button, overrun on release */
   if (M.shiftT > 0) thr = 0;                                     /* the clutch is in */
-  M.throttle += (clamp(thr, 0, 1) - M.throttle) * (1 - Math.exp(-dt / .18));
+  M.throttle += (clamp(thr, 0, 1) - M.throttle) * (1 - Math.exp(-dt / (M.rev || M.shiftT > 0 ? .12 : .3)));
 
   /* rpm and gears */
   const kmh = M.speed * KMH;
@@ -394,7 +399,7 @@ function stepModel(now) {
     else M.freeRpm += (p.idle - M.freeRpm) * (1 - Math.exp(-dt / .55));
     if (M.freeRpm > rpmTarget) rpmTarget = M.freeRpm;
   } else M.freeRpm = p.idle;
-  M.rpm += (rpmTarget - M.rpm) * (1 - Math.exp(-dt / (M.shiftT > 0 ? .08 : M.rev ? .06 : .14)));
+  M.rpm += (rpmTarget - M.rpm) * (1 - Math.exp(-dt / (M.shiftT > 0 ? .08 : M.rev ? .06 : steady ? .35 : .14)));
 
   /* the trip and the 0-60 (0-100 km/h in metric), timed on the raw speed, not the smoothed one */
   if (running && !M.offline) {
@@ -451,9 +456,12 @@ class EngineProc extends AudioWorkletProcessor {
         const f = b.fire[b.next];
         if (this.ang >= f && this.ang - f < dAng * 2) { b.next = (b.next + 1) % b.fire.length;
           let amp = (0.22 + 0.78 * thr) * (0.88 + 0.24 * this.rnd());
+          const idleK = Math.max(0, 1 - thr * 3) * Math.max(0, 1 - n * 2.5);
+          amp *= 1 + (this.rnd() - .5) * (c.idleRough || 0) * idleK;            /* an idle's firings are uneven */
+          if (idleK > .5 && this.rnd() < (c.missP || 0)) amp *= .2;              /* and now and then one barely fires */
           if (over) amp = this.rnd() < c.popP ? 1.4 + 1.2 * this.rnd() : amp * 0.45;
-          b.env = amp; b.t = 0; b.nz = amp * c.rough; }
-        let p = b.t < pulseW ? b.env * Math.sin(3.14159 * b.t / pulseW) : 0; b.t++;
+          b.env = amp; b.t = -Math.floor(this.rnd() * (c.jit || 0) * sr / 1000 * idleK); b.nz = amp * c.rough; }
+        let p = (b.t >= 0 && b.t < pulseW) ? b.env * Math.sin(3.14159 * b.t / pulseW) : 0; b.t++;
         b.nz *= c.nzDecay; p += b.nz * (this.rnd() * 2 - 1);
         const d = b.dl[b.di]; b.lpY += (d - b.lpY) * pipeLp;
         const y = p + pipeG * b.lpY; b.dl[b.di] = y; b.di = (b.di + 1) % b.dl.length;
@@ -544,7 +552,7 @@ class Engine {
       this.bp.frequency.setTargetAtTime(p.noise[1] + (p.noise[2] - p.noise[1]) * load, t, .08);
       this.noiseG.gain.setTargetAtTime(p.noise[0] * (.25 + .75 * load) * (0.5 + 0.5 * n), t, .08);
     }
-    const lvl = (.14 + .86 * Math.pow(clamp(thr * .65 + n * .35, 0, 1), 1.15)) * (p.vol || 1);   /* idle is quiet, full throttle is loud */
+    const lvl = (.2 + .8 * Math.pow(clamp(thr * .65 + n * .35, 0, 1), 1.15)) * (p.vol || 1);   /* idle is quiet, full throttle is loud */
     this.body.gain.setTargetAtTime(this.wk ? lvl * (p.comb.mix || 1) : lvl, t, .08);
     if (n >= 1.0 && (p.gears || M.rev)) { this.lim.gain.setTargetAtTime((this.limK++ & 1) ? .2 : 1, t, .008); }   /* bouncing off the limiter */
     else if (this.lim.gain.value < 1) this.lim.gain.setTargetAtTime(1, t, .02);
@@ -583,6 +591,10 @@ async function renderClip(id, secs = 9, mode = 'drive') {
   const wk = await loadWorklet(ac), dest = makeLimiter(ac), g = ac.createGain(); g.gain.value = .7; dest.connect(g).connect(ac.destination);
   const e = new Engine(p, { ac, dest, noise: makeNoise(ac), wk });
   const span = p.redline - p.idle;
+  if (mode === 'idle') {   /* ten seconds at a standstill */
+    for (let t = 0; t < secs; t += 1 / 30) e.update(p.idle + p.lump * 70 * (Math.sin(t * 11) + .6 * Math.sin(t * 27)), .05 + .02 * Math.sin(t * 2.9), 1 / 30, t);
+    const buf = await ac.startRendering(); return buf.getChannelData(0);
+  }
   if (mode === 'rev') {   /* stopped: two blips, then held into the limiter, through the model itself */
     const keep = { speed: M.speed, rpm: M.rpm, freeRpm: M.freeRpm, throttle: M.throttle, rev: M.rev, accel: M.accel };
     M.speed = 0; M.target = 0; M.rpm = p.idle; M.freeRpm = p.idle; M.throttle = 0; M.offline = true;
@@ -631,13 +643,24 @@ function gpsStop() { if (watchId !== null) navigator.geolocation.clearWatch(watc
 function onPos(pos) {
   const c = pos.coords, now = performance.now();
   let v = (c.speed != null && c.speed >= 0 && isFinite(c.speed)) ? c.speed : null;
-  if (v === null && M.lastPos) {                                   /* no speed field: derive it from the last fix */
-    const dt = (pos.timestamp - M.lastPos.timestamp) / 1000;
-    if (dt > 0.4) v = haversine(M.lastPos.coords, c) / dt;
+  const fx = M.fixes; fx.push({ t: pos.timestamp, latitude: c.latitude, longitude: c.longitude }); if (fx.length > 10) fx.shift();
+  M.posMode = v === null;
+  if (v === null && fx.length >= 2) {
+    /* no speed field: distance over a baseline of 2-4 s, not fix to fix (a 3 m wobble a second is 7 mph of jitter) */
+    const need = (c.accuracy > 20 ? 4500 : 3200); let j = fx.length - 2; while (j > 0 && pos.timestamp - fx[j].t < need) j--;
+    const dt = (pos.timestamp - fx[j].t) / 1000; if (dt > 0.4) v = haversine(fx[j], c) / dt;
   }
   M.lastPos = pos;
-  if (v !== null) { v = v < 0.6 ? 0 : v * (1 + S.cal / 100); const dtF = (now - M.gpsT) / 1000;
-    M.fixA = (M.gpsOk && dtF > .3 && dtF < 3) ? clamp((v - M.fixV) / dtF, -5, 4) : 0; M.fixV = v;
+  if (v !== null && isFinite(v)) { v = v < 0.6 ? 0 : v * (1 + S.cal / 100); const dtF = (now - M.gpsT) / 1000;
+    /* the trend between fixes is kept small and smoothed: it is for a real launch, not for jitter */
+    const a = (M.gpsOk && dtF > .3 && dtF < 3) ? clamp((v - M.fixV) / dtF, -4, 4) : 0;
+    M.fixA = (Math.abs(a) > .45 && Math.sign(a) === Math.sign(M.lastA)) ? a * .7 : 0; M.lastA = a; M.fixV = v;   /* two fixes agreeing on a real change, never jitter */
+    /* steady: the last fixes agree, so the engine follows their average; a clear trend switches to the raw fix */
+    const h = M.vHist; h.push(v); if (h.length > 5) h.shift();
+    const mean = h.reduce((x, y) => x + y, 0) / h.length, sd = Math.sqrt(h.reduce((x, y) => x + (y - mean) ** 2, 0) / h.length);
+    const band = M.posMode ? 2.2 : 1.2, sdMax = M.posMode ? 1.5 : .7;
+    M.cruise = h.length >= 3 && sd < sdMax && Math.abs(v - mean) < band;
+    if (M.cruise) { v = mean; M.fixA = 0; }
     M.target = v; M.gpsT = now; M.gpsOk = true; M.gpsLost = false;
     gpsState(c.accuracy > 30 ? 'warn' : 'ok', c.accuracy > 30 ? 'GPS weak' : 'GPS live'); }
 }
