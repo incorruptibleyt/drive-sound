@@ -92,6 +92,17 @@
   .preset span{display:block;font-size:12px;color:var(--mute);margin-top:3px}
   .preset.on{border-color:var(--accent);background:linear-gradient(180deg,var(--tint),transparent)}
   .preset .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}
+  .revrow{display:flex;align-items:flex-end;justify-content:flex-end;gap:12px}
+  .revrow .demo{flex:1;align-self:center;min-width:0}
+  .revrow .demo input[type=range]{min-width:50px}
+  @media (max-width:520px){.revrow .demo label{display:none}.revrow .demo .val{min-width:0}}
+  #revBtn{flex:0 0 auto;width:84px;height:84px;border-radius:50%;
+    background:var(--panel);border:2px solid var(--accent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-weight:800;letter-spacing:.2em;font-size:15px;
+    box-shadow:0 0 24px var(--glow);touch-action:none;transition:transform .1s,opacity .3s,background .1s}
+  #revBtn small{font-size:9px;letter-spacing:.2em;color:var(--mute);font-weight:600}
+  #revBtn.on{transform:scale(.94);background:var(--tint)}
+  #revBtn.off{opacity:.35;box-shadow:none}
   .volrow{display:flex;align-items:center;gap:12px}
   .volrow svg{width:20px;height:20px;fill:none;stroke:var(--mute);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
   input[type=range]{-webkit-appearance:none;appearance:none;flex:1;height:44px;background:transparent;margin:0}
@@ -197,11 +208,14 @@
   </div>
 
   <div class="bottom">
+    <div class="revrow">
     <div class="demo" id="demo">
       <label>Demo</label>
       <input type="range" id="demoSpeed" min="0" max="160" value="0" step="1">
       <div class="val" id="demoVal">0 mph</div>
       <button class="btn" id="autoBtn">Auto drive</button>
+    </div>
+    <button id="revBtn" class="off" aria-label="Hold to rev"><span>REV</span><small>HOLD</small></button>
     </div>
     <div class="presets" id="presets"></div>
     <div class="volrow">
@@ -317,7 +331,7 @@ const M = {
   accel:0,        /* smoothed m/s² */
   throttle:0, rpm:0, gear:0, shiftT:0, shiftDir:0,
   t:performance.now(), gpsT:0, gpsOk:false, lastPos:null, auto:false, autoT:0, fixA:0, fixV:0,
-  armed:true, launchT:0, saveT:0,
+  armed:true, launchT:0, saveT:0, rev:0, freeRpm:0, offline:false,
 };
 
 function stepModel(now) {
@@ -346,6 +360,8 @@ function stepModel(now) {
   let thr = 0.16 + M.accel * 0.42 + 0.14 * clamp(M.speed / 35, 0, 1);
   if (M.accel < -0.5) thr = 0;                                  /* braking or lifting off: overrun */
   if (M.speed < 0.4) thr = 0.04 + 0.03 * Math.sin(now / 350);   /* idle flutter */
+  const stopped = M.speed * KMH < 2;
+  if (stopped && (M.rev || M.freeRpm > p.idle + 50)) thr = M.rev ? 1 : 0;   /* a free rev in neutral: throttle on the button, overrun on release */
   if (M.shiftT > 0) thr = 0;                                     /* the clutch is in */
   M.throttle += (clamp(thr, 0, 1) - M.throttle) * (1 - Math.exp(-dt / .18));
 
@@ -370,10 +386,17 @@ function stepModel(now) {
   } else {
     rpmTarget = p.idle + clamp(kmh / p.top, 0, 1.05) * (p.redline - p.idle);
   }
-  M.rpm += (rpmTarget - M.rpm) * (1 - Math.exp(-dt / (M.shiftT > 0 ? .08 : .14)));
+  if (stopped) {   /* a free rev: the engine spins up fast with no load, and falls back on its own */
+    const top = p.redline * 1.03;
+    M.freeRpm = Math.max(p.idle, M.freeRpm);
+    if (M.rev) M.freeRpm += (top - M.freeRpm) * (1 - Math.exp(-dt / .32));
+    else M.freeRpm += (p.idle - M.freeRpm) * (1 - Math.exp(-dt / .55));
+    if (M.freeRpm > rpmTarget) rpmTarget = M.freeRpm;
+  } else M.freeRpm = p.idle;
+  M.rpm += (rpmTarget - M.rpm) * (1 - Math.exp(-dt / (M.shiftT > 0 ? .08 : M.rev ? .06 : .14)));
 
   /* the trip and the 0-60 (0-100 km/h in metric), timed on the raw speed, not the smoothed one */
-  if (running) {
+  if (running && !M.offline) {
     S.trip.m += M.target * dt; if (M.target > S.trip.top) S.trip.top = M.target;
     const goal = S.unit === 'mph' ? 60 / MPH : 100 / KMH;
     if (M.target < .3) { M.armed = true; M.launchT = 0; }
@@ -522,7 +545,7 @@ class Engine {
     }
     const lvl = (.14 + .86 * Math.pow(clamp(thr * .65 + n * .35, 0, 1), 1.15)) * (p.vol || 1);   /* idle is quiet, full throttle is loud */
     this.body.gain.setTargetAtTime(this.wk ? lvl * (p.comb.mix || 1) : lvl, t, .08);
-    if (p.gears && n >= 1.0) { this.lim.gain.setTargetAtTime((this.limK++ & 1) ? .2 : 1, t, .008); }   /* bouncing off the limiter */
+    if (n >= 1.0 && (p.gears || M.rev)) { this.lim.gain.setTargetAtTime((this.limK++ & 1) ? .2 : 1, t, .008); }   /* bouncing off the limiter */
     else if (this.lim.gain.value < 1) this.lim.gain.setTargetAtTime(1, t, .02);
     if (this.wh) {
       const [a, b, g] = p.whine;
@@ -554,11 +577,22 @@ class Engine {
 }
 
 /* An offline render of an engine, for listening without a car: idle, a pull to the redline, a cruise, a lift-off, idle. */
-async function renderClip(id, secs = 9) {
+async function renderClip(id, secs = 9, mode = 'drive') {
   const p = PRESETS.find(x => x.id === id), sr = 48000, ac = new OfflineAudioContext(1, Math.ceil(secs * sr), sr);
   const wk = await loadWorklet(ac), dest = makeLimiter(ac), g = ac.createGain(); g.gain.value = .7; dest.connect(g).connect(ac.destination);
   const e = new Engine(p, { ac, dest, noise: makeNoise(ac), wk });
   const span = p.redline - p.idle;
+  if (mode === 'rev') {   /* stopped: two blips, then held into the limiter, through the model itself */
+    const keep = { speed: M.speed, rpm: M.rpm, freeRpm: M.freeRpm, throttle: M.throttle, rev: M.rev, accel: M.accel };
+    M.speed = 0; M.target = 0; M.rpm = p.idle; M.freeRpm = p.idle; M.throttle = 0; M.offline = true;
+    for (let t = 0; t < secs; t += 1 / 30) {
+      M.rev = (t > 1 && t < 1.35) || (t > 2.2 && t < 2.5) || (t > 3.6 && t < 6.2) ? 1 : 0;
+      M.t = t * 1000 - 33; stepModel(t * 1000);
+      e.update(M.rpm, M.throttle, 1 / 30, t);
+    }
+    Object.assign(M, keep); M.offline = false; M.t = performance.now();
+    const buf = await ac.startRendering(); return buf.getChannelData(0);
+  }
   for (let t = 0; t < secs; t += 1 / 30) {
     let n, thr;
     if (t < 1.5) { n = 0; thr = .05; }
@@ -789,6 +823,7 @@ function drawHud(now) {
   if (lit !== drawHud.lit) { drawHud.lit = lit; leds.querySelectorAll('i').forEach((el, i) => el.classList.toggle('on', i < lit)); }
   leds.classList.toggle('blink', n > .96);
   if (hudHidden) setText('miniN', $('speed').textContent);
+  revBtn.classList.toggle('off', M.speed * KMH >= 2 || !running);
 }
 let shiftTO = 0;
 function flashShift(g) { const el = $('shiftLbl'); el.textContent = 'Shift · ' + g; el.classList.add('show'); clearTimeout(shiftTO); shiftTO = setTimeout(() => el.classList.remove('show'), 450);
@@ -857,6 +892,7 @@ addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   if (e.key === 'Escape') $('sheet').classList.remove('open');
   if (e.key === ' ' && running) { e.preventDefault(); toggleHud(); }
+  if ((e.key === 'r' || e.key === 'R') && running && !e.repeat) setRev(1);
   if (/^[1-6]$/.test(e.key) && PRESETS[+e.key - 1]) setEngine(PRESETS[+e.key - 1].id);
   if (S.src !== 'demo') return; const el = $('demoSpeed'); if (e.key === 'ArrowUp') { el.value = +el.value + 3; el.dispatchEvent(new Event('input')); } if (e.key === 'ArrowDown') { el.value = +el.value - 3; el.dispatchEvent(new Event('input')); } });
 function applySource() { if (S.src === 'gps') { $('demo').classList.remove('show'); M.auto = false; $('autoBtn').classList.remove('on'); if (running) gpsStart(); } else { gpsStop(); $('demo').classList.add('show'); gpsState('warn', 'Demo'); } }
@@ -879,6 +915,13 @@ $('tripReset').addEventListener('click', () => { S.trip = { m: 0, top: 0 }; S.be
 /* tap the scene to hide or show the controls */
 let downAt = 0;
 cv.addEventListener('pointerdown', () => { downAt = performance.now(); });
+const revBtn = $('revBtn');
+function setRev(on) { M.rev = on ? 1 : 0; revBtn.classList.toggle('on', !!on); }
+revBtn.addEventListener('pointerdown', e => { e.preventDefault(); revBtn.setPointerCapture(e.pointerId); setRev(1); });
+for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) revBtn.addEventListener(ev, () => setRev(0));
+revBtn.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('keyup', e => { if (e.key === 'r' || e.key === 'R') setRev(0); });
+addEventListener('blur', () => setRev(0));
 function toggleHud() { hudHidden = !hudHidden; $('hud').classList.toggle('hidden', hudHidden); $('mini').classList.toggle('show', hudHidden); $('miniU').textContent = S.unit === 'mph' ? 'mph' : 'km/h'; }
 cv.addEventListener('pointerup', () => { if (performance.now() - downAt < 300 && running) toggleHud(); });
 addEventListener('error', e => toast('Something went wrong: ' + (e.message || 'unknown error')));
